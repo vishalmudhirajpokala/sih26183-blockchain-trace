@@ -8,9 +8,7 @@ import requests
 from dotenv import load_dotenv
 from tags import is_tagged
 
-
 load_dotenv()
-
 
 # ============================================================
 # TRONSCAN API
@@ -28,19 +26,25 @@ TRONSCAN_API_KEY = os.getenv(
     "TRONSCAN_API_KEY"
 )
 
-
 # ============================================================
 # TRACE CONFIGURATION
 # ============================================================
 
 HTTP_TIMEOUT_SECONDS = 10
 OVERALL_TIMEOUT_SECONDS = 60
+
+# Keep this controlled because every extra transfer can create
+# another recursive API request.
 MAX_TRANSACTIONS_PER_HOP = 5
 
 RAPID_HOP_SECONDS = 300
 
 FAN_OUT_THRESHOLD = 3
 FAN_IN_THRESHOLD = 3
+
+# Small spacing between TronScan requests helps avoid repeatedly
+# hammering the API during recursive tracing.
+MIN_REQUEST_INTERVAL_SECONDS = 0.35
 
 
 # ============================================================
@@ -51,10 +55,9 @@ def classify_tag(tag):
     """
     Classify a public TronScan entity label.
 
-    Curated verified addresses from tags.py
-    are checked before this fallback layer.
+    Curated verified addresses from tags.py are checked before
+    this fallback layer.
     """
-
     if not tag:
         return None
 
@@ -165,7 +168,6 @@ def classify_address(address, tronscan_tag=None):
     2. TronScan public tag
     3. Unknown
     """
-
     if not address:
         return None
 
@@ -214,6 +216,136 @@ def get_headers():
 
 
 # ============================================================
+# TRONSCAN RATE-LIMIT-AWARE REQUEST
+# ============================================================
+
+_LAST_REQUEST_TIME = 0.0
+
+
+def tronscan_get(
+    url,
+    params,
+    deadline,
+    max_attempts=3,
+):
+    """
+    Perform a TronScan GET request with:
+
+    - API key header
+    - request spacing
+    - 429 rate-limit handling
+    - Retry-After support
+    - exponential backoff
+    - overall deadline protection
+    """
+
+    global _LAST_REQUEST_TIME
+
+    last_response = None
+
+    for attempt in range(max_attempts):
+        remaining = deadline - time.monotonic()
+
+        if remaining <= 0:
+            raise requests.exceptions.Timeout(
+                "Overall tracing timeout reached."
+            )
+
+        # ----------------------------------------------------
+        # REQUEST SPACING
+        # ----------------------------------------------------
+
+        elapsed_since_last_request = (
+            time.monotonic() - _LAST_REQUEST_TIME
+        )
+
+        if (
+            elapsed_since_last_request
+            < MIN_REQUEST_INTERVAL_SECONDS
+        ):
+            spacing = (
+                MIN_REQUEST_INTERVAL_SECONDS
+                - elapsed_since_last_request
+            )
+
+            if spacing >= remaining:
+                raise requests.exceptions.Timeout(
+                    "Overall tracing timeout reached."
+                )
+
+            time.sleep(spacing)
+
+        remaining = deadline - time.monotonic()
+
+        if remaining <= 0:
+            raise requests.exceptions.Timeout(
+                "Overall tracing timeout reached."
+            )
+
+        # ----------------------------------------------------
+        # HTTP REQUEST
+        # ----------------------------------------------------
+
+        try:
+            response = requests.get(
+                url,
+                params=params,
+                headers=get_headers(),
+                timeout=min(
+                    HTTP_TIMEOUT_SECONDS,
+                    remaining,
+                ),
+            )
+        finally:
+            _LAST_REQUEST_TIME = time.monotonic()
+
+        last_response = response
+
+        # ----------------------------------------------------
+        # SUCCESS / NORMAL ERROR
+        # ----------------------------------------------------
+
+        if response.status_code != 429:
+            return response
+
+        # ----------------------------------------------------
+        # RATE LIMITED
+        # ----------------------------------------------------
+
+        retry_after = response.headers.get(
+            "Retry-After"
+        )
+
+        try:
+            wait_seconds = float(retry_after)
+        except (TypeError, ValueError):
+            # Conservative exponential backoff when
+            # TronScan does not provide Retry-After.
+            wait_seconds = 2.0 * (attempt + 1)
+
+        # Keep retries bounded.
+        wait_seconds = max(
+            1.0,
+            min(wait_seconds, 8.0),
+        )
+
+        remaining = deadline - time.monotonic()
+
+        if remaining <= wait_seconds:
+            break
+
+        print(
+            "TronScan HTTP 429 rate limit. "
+            f"Retrying in {wait_seconds:.1f}s "
+            f"(attempt {attempt + 1}/{max_attempts})..."
+        )
+
+        time.sleep(wait_seconds)
+
+    return last_response
+
+
+# ============================================================
 # TIMESTAMP EXTRACTION
 # ============================================================
 
@@ -234,10 +366,6 @@ def extract_timestamp(transaction):
     if not isinstance(transaction, dict):
         return None
 
-    # --------------------------------------------------------
-    # COMMON TIMESTAMP FIELD NAMES
-    # --------------------------------------------------------
-
     possible_fields = [
         "timestamp",
         "block_timestamp",
@@ -252,11 +380,10 @@ def extract_timestamp(transaction):
     ]
 
     # --------------------------------------------------------
-    # CHECK DIRECT FIELDS
+    # DIRECT FIELDS
     # --------------------------------------------------------
 
     for field in possible_fields:
-
         value = transaction.get(field)
 
         if value is None or value == "":
@@ -267,11 +394,9 @@ def extract_timestamp(transaction):
         # ----------------------------------------------------
 
         if isinstance(value, (int, float)):
-
             try:
                 timestamp = float(value)
 
-                # Milliseconds → seconds
                 if timestamp > 10_000_000_000:
                     timestamp /= 1000
 
@@ -290,20 +415,15 @@ def extract_timestamp(transaction):
         # ----------------------------------------------------
 
         if isinstance(value, str):
-
             value_clean = value.strip()
 
             if not value_clean:
                 continue
 
-            # -----------------------------------------------
             # Numeric string
-            # -----------------------------------------------
-
             try:
                 timestamp = float(value_clean)
 
-                # Milliseconds → seconds
                 if timestamp > 10_000_000_000:
                     timestamp /= 1000
 
@@ -317,15 +437,14 @@ def extract_timestamp(transaction):
             ):
                 pass
 
-            # -----------------------------------------------
             # ISO-8601 datetime
-            # -----------------------------------------------
-
             try:
                 iso_value = value_clean
 
                 if iso_value.endswith("Z"):
-                    iso_value = iso_value[:-1] + "+00:00"
+                    iso_value = (
+                        iso_value[:-1] + "+00:00"
+                    )
 
                 parsed = datetime.fromisoformat(
                     iso_value
@@ -341,7 +460,7 @@ def extract_timestamp(transaction):
                 pass
 
     # --------------------------------------------------------
-    # CHECK COMMON NESTED OBJECTS
+    # COMMON NESTED OBJECTS
     # --------------------------------------------------------
 
     nested_objects = [
@@ -355,7 +474,6 @@ def extract_timestamp(transaction):
     ]
 
     for nested in nested_objects:
-
         if not isinstance(nested, dict):
             continue
 
@@ -369,9 +487,7 @@ def extract_timestamp(transaction):
     # --------------------------------------------------------
 
     for value in transaction.values():
-
         if isinstance(value, dict):
-
             result = extract_timestamp(value)
 
             if result is not None:
@@ -399,10 +515,6 @@ def extract_transaction_evidence(transaction):
             "transaction_timestamp": None,
         }
 
-    # --------------------------------------------------------
-    # TRANSACTION HASH / ID
-    # --------------------------------------------------------
-
     transaction_hash = (
         transaction.get("transaction_id")
         or transaction.get("transactionId")
@@ -420,19 +532,11 @@ def extract_transaction_evidence(transaction):
         or transaction.get("txid")
     )
 
-    # --------------------------------------------------------
-    # BLOCK NUMBER
-    # --------------------------------------------------------
-
     block_number = (
         transaction.get("block")
         or transaction.get("blockNumber")
         or transaction.get("block_number")
     )
-
-    # --------------------------------------------------------
-    # TIMESTAMP
-    # --------------------------------------------------------
 
     transaction_timestamp = extract_timestamp(
         transaction
@@ -461,8 +565,7 @@ def calculate_rapid_hop(
         return False
 
     time_difference = abs(
-        current_timestamp
-        - previous_timestamp
+        current_timestamp - previous_timestamp
     )
 
     return (
@@ -476,11 +579,13 @@ def calculate_rapid_hop(
 # ============================================================
 
 def extract_token_amount(transfer):
-
     token_info = transfer.get(
         "tokenInfo",
         {},
     )
+
+    if not isinstance(token_info, dict):
+        token_info = {}
 
     token_symbol = (
         token_info.get("tokenAbbr")
@@ -504,10 +609,16 @@ def extract_token_amount(transfer):
         {},
     )
 
+    if not isinstance(trigger_info, dict):
+        trigger_info = {}
+
     parameter = trigger_info.get(
         "parameter",
         {},
     )
+
+    if not isinstance(parameter, dict):
+        parameter = {}
 
     raw_amount = parameter.get(
         "value"
@@ -521,33 +632,23 @@ def extract_token_amount(transfer):
     amount = None
 
     try:
-
         if raw_amount is not None:
-
             if decimals is not None:
-
                 amount = (
                     int(raw_amount)
-                    /
-                    (
+                    / (
                         10
-                        **
-                        int(decimals)
+                        ** int(decimals)
                     )
                 )
-
             else:
-
-                amount = int(
-                    raw_amount
-                )
+                amount = int(raw_amount)
 
     except (
         ValueError,
         TypeError,
         OverflowError,
     ):
-
         amount = None
 
     return {
@@ -567,51 +668,41 @@ def detect_trc20_fan_in(
     deadline,
 ):
     """
-    Detect whether multiple unique wallets
-    sent TRC20 tokens into this address.
+    Detect whether multiple unique wallets sent TRC20
+    tokens into this address.
 
     Behavioral indicator only.
     It does NOT establish fraudulent activity.
     """
 
     try:
-
-        remaining = (
-            deadline
-            - time.monotonic()
-        )
-
-        if remaining <= 0:
-
-            return {
-                "fan_in": False,
-                "incoming_senders": [],
-                "incoming_count": 0,
-            }
-
-        response = requests.get(
+        response = tronscan_get(
             TRONSCAN_TRC20_URL,
             params={
                 "toAddress": address,
                 "limit": MAX_TRANSACTIONS_PER_HOP,
             },
-            headers=get_headers(),
-            timeout=min(
-                HTTP_TIMEOUT_SECONDS,
-                remaining,
-            ),
+            deadline=deadline,
         )
 
         response.raise_for_status()
-
         data = response.json()
 
-    except (
-        requests.exceptions.Timeout,
-        requests.exceptions.RequestException,
-        ValueError,
-    ):
+    except requests.exceptions.Timeout:
+        return {
+            "fan_in": False,
+            "incoming_senders": [],
+            "incoming_count": 0,
+        }
 
+    except requests.exceptions.RequestException:
+        return {
+            "fan_in": False,
+            "incoming_senders": [],
+            "incoming_count": 0,
+        }
+
+    except ValueError:
         return {
             "fan_in": False,
             "incoming_senders": [],
@@ -624,7 +715,6 @@ def detect_trc20_fan_in(
     )
 
     if not transfers:
-
         transfers = data.get(
             "data",
             [],
@@ -633,6 +723,8 @@ def detect_trc20_fan_in(
     senders = set()
 
     for transfer in transfers:
+        if not isinstance(transfer, dict):
+            continue
 
         sender = (
             transfer.get("from_address")
@@ -642,16 +734,17 @@ def detect_trc20_fan_in(
         if not sender:
             continue
 
-        if sender.lower() == address.lower():
+        if (
+            sender.lower()
+            == address.lower()
+        ):
             continue
 
         senders.add(
             sender.lower()
         )
 
-    incoming_count = len(
-        senders
-    )
+    incoming_count = len(senders)
 
     fan_in = (
         incoming_count
@@ -659,7 +752,6 @@ def detect_trc20_fan_in(
     )
 
     if fan_in:
-
         print(
             "\n!!! FAN-IN DETECTED !!!"
         )
@@ -676,9 +768,7 @@ def detect_trc20_fan_in(
 
     return {
         "fan_in": fan_in,
-        "incoming_senders": list(
-            senders
-        ),
+        "incoming_senders": list(senders),
         "incoming_count": incoming_count,
     }
 
@@ -696,13 +786,11 @@ def trace_wallet(
     _path=None,
     _previous_timestamp=None,
 ):
-
     # ========================================================
     # API KEY CHECK
     # ========================================================
 
     if not TRONSCAN_API_KEY:
-
         return {
             "matched": False,
             "reason": "api_error",
@@ -717,7 +805,6 @@ def trace_wallet(
     # ========================================================
 
     if _deadline is None:
-
         _deadline = (
             time.monotonic()
             + OVERALL_TIMEOUT_SECONDS
@@ -734,7 +821,6 @@ def trace_wallet(
     )
 
     if normalized_address in _visited:
-
         return {
             "matched": False,
             "reason": "already_visited",
@@ -752,7 +838,6 @@ def trace_wallet(
     # ========================================================
 
     if time.monotonic() >= _deadline:
-
         return {
             "matched": False,
             "reason": "timeout",
@@ -766,7 +851,6 @@ def trace_wallet(
     # ========================================================
 
     if depth >= max_depth:
-
         return {
             "matched": False,
             "reason": "depth_exceeded",
@@ -777,7 +861,7 @@ def trace_wallet(
         }
 
     # ========================================================
-    # BEHAVIORAL STATE
+    # BEHAVIOURAL STATE
     # ========================================================
 
     fan_out = False
@@ -804,39 +888,31 @@ def trace_wallet(
     # ========================================================
 
     try:
-
         remaining = (
             _deadline
             - time.monotonic()
         )
 
         if remaining <= 0:
-
             return {
                 "matched": False,
                 "reason": "timeout",
                 "detail": "No time remaining.",
             }
 
-        response = requests.get(
+        response = tronscan_get(
             TRONSCAN_TRC20_URL,
             params={
                 "fromAddress": address,
                 "limit": MAX_TRANSACTIONS_PER_HOP,
             },
-            headers=get_headers(),
-            timeout=min(
-                HTTP_TIMEOUT_SECONDS,
-                remaining,
-            ),
+            deadline=_deadline,
         )
 
         response.raise_for_status()
-
         data = response.json()
 
     except requests.exceptions.Timeout as e:
-
         return {
             "matched": False,
             "reason": "timeout",
@@ -845,7 +921,6 @@ def trace_wallet(
         }
 
     except requests.exceptions.RequestException as e:
-
         return {
             "matched": False,
             "reason": "api_error",
@@ -854,7 +929,6 @@ def trace_wallet(
         }
 
     except ValueError:
-
         return {
             "matched": False,
             "reason": "api_error",
@@ -868,7 +942,6 @@ def trace_wallet(
     )
 
     if not transfers:
-
         transfers = data.get(
             "data",
             [],
@@ -886,6 +959,8 @@ def trace_wallet(
     destinations = set()
 
     for transfer in transfers:
+        if not isinstance(transfer, dict):
+            continue
 
         destination = (
             transfer.get("to_address")
@@ -893,13 +968,14 @@ def trace_wallet(
         )
 
         if destination:
-
             destinations.add(
                 destination.lower()
             )
 
-    if len(destinations) >= FAN_OUT_THRESHOLD:
-
+    if (
+        len(destinations)
+        >= FAN_OUT_THRESHOLD
+    ):
         fan_out = True
 
         print(
@@ -917,9 +993,7 @@ def trace_wallet(
     for transfer in transfers[
         :MAX_TRANSACTIONS_PER_HOP
     ]:
-
         if time.monotonic() >= _deadline:
-
             return {
                 "matched": False,
                 "reason": "timeout",
@@ -929,6 +1003,9 @@ def trace_wallet(
                 "fan_in": fan_in,
                 "fan_out": fan_out,
             }
+
+        if not isinstance(transfer, dict):
+            continue
 
         # ----------------------------------------------------
         # ADDRESSES
@@ -943,13 +1020,11 @@ def trace_wallet(
         )
 
         if not from_address:
-
             from_address = transfer.get(
                 "fromAddress"
             )
 
         if not to_address:
-
             to_address = transfer.get(
                 "toAddress"
             )
@@ -981,7 +1056,6 @@ def trace_wallet(
         )
 
         if rapid_hop:
-
             rapid_hops = True
 
             print(
@@ -1009,7 +1083,6 @@ def trace_wallet(
             from_tag_info,
             dict,
         ):
-
             from_tag = (
                 from_tag_info.get(
                     "from_address_tag"
@@ -1026,14 +1099,12 @@ def trace_wallet(
             from_tag_info,
             str,
         ):
-
             from_tag = from_tag_info
 
         if isinstance(
             to_tag_info,
             dict,
         ):
-
             to_tag = (
                 to_tag_info.get(
                     "to_address_tag"
@@ -1050,7 +1121,6 @@ def trace_wallet(
             to_tag_info,
             str,
         ):
-
             to_tag = to_tag_info
 
         # ----------------------------------------------------
@@ -1086,19 +1156,19 @@ def trace_wallet(
             {},
         )
 
-        contract_address = (
-            trigger_info.get(
-                "contract_address"
+        if isinstance(
+            trigger_info,
+            dict,
+        ):
+            contract_address = (
+                trigger_info.get(
+                    "contract_address"
+                )
             )
-            if isinstance(
-                trigger_info,
-                dict,
-            )
-            else None
-        )
+        else:
+            contract_address = None
 
         if not contract_address:
-
             contract_address = transfer.get(
                 "contract_address"
             )
@@ -1122,7 +1192,6 @@ def trace_wallet(
         )
 
         if sender_classification:
-
             print(
                 "!!! TRC20 SENDER MATCH !!!",
                 from_address,
@@ -1137,7 +1206,6 @@ def trace_wallet(
                 )
                 == "high_risk"
             ):
-
                 high_risk_entity = True
 
         # ----------------------------------------------------
@@ -1154,7 +1222,6 @@ def trace_wallet(
         # ====================================================
 
         if recipient_classification:
-
             print(
                 "!!! TRC20 DESTINATION MATCH !!!"
             )
@@ -1198,64 +1265,47 @@ def trace_wallet(
                 )
                 == "high_risk"
             ):
-
                 high_risk_entity = True
 
             return {
                 "matched": True,
                 "tag": recipient_classification,
-
                 "hops": depth + 1,
-
                 "path": (
                     _path
                     + [to_address]
                 ),
-
                 "token": token_symbol,
                 "amount": amount,
                 "raw_amount": raw_amount,
                 "decimals": decimals,
-
-                "contract_address": (
-                    contract_address
-                ),
-
+                "contract_address": contract_address,
                 "from_address": from_address,
                 "to_address": to_address,
-
-                "risk_transaction": (
-                    risk_transaction
-                ),
-
+                "risk_transaction": risk_transaction,
                 "rapid_hops": rapid_hops,
                 "fan_out": fan_out,
                 "fan_in": fan_in,
-
                 "high_risk_entity": (
                     high_risk_entity
                 ),
 
-                # FORENSIC TRANSACTION EVIDENCE
-
+                # FORENSIC EVIDENCE
                 "transaction_hash": (
                     transaction_evidence.get(
                         "transaction_hash"
                     )
                 ),
-
                 "transaction_id": (
                     transaction_evidence.get(
                         "transaction_id"
                     )
                 ),
-
                 "block_number": (
                     transaction_evidence.get(
                         "block_number"
                     )
                 ),
-
                 "transaction_timestamp": (
                     transaction_evidence.get(
                         "transaction_timestamp"
@@ -1268,7 +1318,6 @@ def trace_wallet(
         # ----------------------------------------------------
 
         if risk_transaction is True:
-
             print(
                 "!!! RISK TRANSACTION !!!",
                 from_address,
@@ -1280,13 +1329,16 @@ def trace_wallet(
         # CONTINUE TRACING
         # ----------------------------------------------------
 
+        normalized_destination = (
+            to_address.lower()
+        )
+
         if (
             to_address
-            and to_address.lower()
+            and normalized_destination
             not in _visited
             and depth + 1 < max_depth
         ):
-
             print(
                 f"TRC20 Depth {depth}: "
                 f"{from_address} -> {to_address}"
@@ -1310,7 +1362,6 @@ def trace_wallet(
             if result.get(
                 "matched"
             ):
-
                 result["rapid_hops"] = (
                     result.get(
                         "rapid_hops",
@@ -1349,7 +1400,6 @@ def trace_wallet(
                 result.get("reason")
                 == "timeout"
             ):
-
                 return result
 
     # ========================================================
@@ -1357,14 +1407,12 @@ def trace_wallet(
     # ========================================================
 
     try:
-
         remaining = (
             _deadline
             - time.monotonic()
         )
 
         if remaining <= 0:
-
             return {
                 "matched": False,
                 "reason": "timeout",
@@ -1373,26 +1421,20 @@ def trace_wallet(
                 "fan_out": fan_out,
             }
 
-        response = requests.get(
+        response = tronscan_get(
             TRONSCAN_TX_URL,
             params={
                 "fromAddress": address,
                 "sort": "-timestamp",
                 "limit": MAX_TRANSACTIONS_PER_HOP,
             },
-            headers=get_headers(),
-            timeout=min(
-                HTTP_TIMEOUT_SECONDS,
-                remaining,
-            ),
+            deadline=_deadline,
         )
 
         response.raise_for_status()
-
         data = response.json()
 
     except requests.exceptions.Timeout as e:
-
         return {
             "matched": False,
             "reason": "timeout",
@@ -1402,7 +1444,6 @@ def trace_wallet(
         }
 
     except requests.exceptions.RequestException as e:
-
         return {
             "matched": False,
             "reason": "api_error",
@@ -1412,7 +1453,6 @@ def trace_wallet(
         }
 
     except ValueError:
-
         return {
             "matched": False,
             "reason": "api_error",
@@ -1433,13 +1473,14 @@ def trace_wallet(
     normal_destinations = set()
 
     for tx in transactions:
+        if not isinstance(tx, dict):
+            continue
 
         destination = tx.get(
             "toAddress"
         )
 
         if destination:
-
             normal_destinations.add(
                 destination.lower()
             )
@@ -1448,7 +1489,6 @@ def trace_wallet(
         len(normal_destinations)
         >= FAN_OUT_THRESHOLD
     ):
-
         fan_out = True
 
         print(
@@ -1466,6 +1506,8 @@ def trace_wallet(
     for tx in transactions[
         :MAX_TRANSACTIONS_PER_HOP
     ]:
+        if not isinstance(tx, dict):
+            continue
 
         destination = tx.get(
             "toAddress"
@@ -1498,7 +1540,6 @@ def trace_wallet(
         )
 
         if rapid_hop:
-
             rapid_hops = True
 
             print(
@@ -1513,6 +1554,10 @@ def trace_wallet(
             "toAddressTag"
         )
 
+        # ----------------------------------------------------
+        # DESTINATION CLASSIFICATION
+        # ----------------------------------------------------
+
         tag_info = classify_address(
             destination,
             destination_tag,
@@ -1523,7 +1568,6 @@ def trace_wallet(
         # ====================================================
 
         if tag_info:
-
             print(
                 "!!! TRX DESTINATION MATCH !!!"
             )
@@ -1567,51 +1611,41 @@ def trace_wallet(
                 )
                 == "high_risk"
             ):
-
                 high_risk_entity = True
 
             return {
                 "matched": True,
                 "tag": tag_info,
-
                 "hops": depth + 1,
-
                 "path": (
                     _path
                     + [destination]
                 ),
-
                 "rapid_hops": rapid_hops,
                 "fan_out": fan_out,
                 "fan_in": fan_in,
-
                 "high_risk_entity": (
                     high_risk_entity
                 ),
-
                 "from_address": address,
                 "to_address": destination,
 
-                # FORENSIC TRANSACTION EVIDENCE
-
+                # FORENSIC EVIDENCE
                 "transaction_hash": (
                     transaction_evidence.get(
                         "transaction_hash"
                     )
                 ),
-
                 "transaction_id": (
                     transaction_evidence.get(
                         "transaction_id"
                     )
                 ),
-
                 "block_number": (
                     transaction_evidence.get(
                         "block_number"
                     )
                 ),
-
                 "transaction_timestamp": (
                     transaction_evidence.get(
                         "transaction_timestamp"
@@ -1623,7 +1657,20 @@ def trace_wallet(
         # CONTINUE TRACING
         # ----------------------------------------------------
 
-        if depth + 1 < max_depth:
+        normalized_destination = (
+            destination.lower()
+        )
+
+        if (
+            destination
+            and normalized_destination
+            not in _visited
+            and depth + 1 < max_depth
+        ):
+            print(
+                f"TRX Depth {depth}: "
+                f"{address} -> {destination}"
+            )
 
             result = trace_wallet(
                 destination,
@@ -1643,7 +1690,6 @@ def trace_wallet(
             if result.get(
                 "matched"
             ):
-
                 result["rapid_hops"] = (
                     result.get(
                         "rapid_hops",
@@ -1682,7 +1728,6 @@ def trace_wallet(
                 result.get("reason")
                 == "timeout"
             ):
-
                 return result
 
     # ========================================================
@@ -1691,19 +1736,15 @@ def trace_wallet(
 
     return {
         "matched": False,
-
         "reason": "no_match",
-
         "detail": (
             "No known exchange, mixer, sanctioned "
             "entity, high-risk entity, or tagged "
             "destination was reached."
         ),
-
         "rapid_hops": rapid_hops,
         "fan_out": fan_out,
         "fan_in": fan_in,
-
         "high_risk_entity": (
             high_risk_entity
         ),
