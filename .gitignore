@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+
+node_modules/
+dist/
+
+backend/reports/*.pdf
+backend/test_report.pdf
+backend/tron_response.json
+backend/test_incoming.py
+backend/test_incoming_trc20.py
