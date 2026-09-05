@@ -11,7 +11,7 @@ from tags import is_tagged
 load_dotenv()
 
 # ============================================================
-# TRONSCAN API
+# TRONSCAN
 # ============================================================
 
 TRONSCAN_TX_URL = (
@@ -27,14 +27,32 @@ TRONSCAN_API_KEY = os.getenv(
 )
 
 # ============================================================
+# TRONGRID
+# ============================================================
+
+TRONGRID_BASE_URL = (
+    "https://api.trongrid.io"
+)
+
+TRONGRID_TRX_URL = (
+    f"{TRONGRID_BASE_URL}/v1/accounts/{{address}}/transactions"
+)
+
+TRONGRID_TRC20_URL = (
+    f"{TRONGRID_BASE_URL}/v1/accounts/{{address}}/transactions/trc20"
+)
+
+TRONGRID_API_KEY = os.getenv(
+    "TRONGRID_API_KEY"
+)
+
+# ============================================================
 # TRACE CONFIGURATION
 # ============================================================
 
 HTTP_TIMEOUT_SECONDS = 10
 OVERALL_TIMEOUT_SECONDS = 60
 
-# Keep this controlled because every extra transfer can create
-# another recursive API request.
 MAX_TRANSACTIONS_PER_HOP = 5
 
 RAPID_HOP_SECONDS = 300
@@ -42,9 +60,14 @@ RAPID_HOP_SECONDS = 300
 FAN_OUT_THRESHOLD = 3
 FAN_IN_THRESHOLD = 3
 
-# Small spacing between TronScan requests helps avoid repeatedly
-# hammering the API during recursive tracing.
 MIN_REQUEST_INTERVAL_SECONDS = 0.35
+
+# ============================================================
+# REQUEST STATE
+# ============================================================
+
+_LAST_TRONSCAN_REQUEST_TIME = 0.0
+_LAST_TRONGRID_REQUEST_TIME = 0.0
 
 
 # ============================================================
@@ -53,11 +76,9 @@ MIN_REQUEST_INTERVAL_SECONDS = 0.35
 
 def classify_tag(tag):
     """
-    Classify a public TronScan entity label.
-
-    Curated verified addresses from tags.py are checked before
-    this fallback layer.
+    Classify a public blockchain entity label.
     """
+
     if not tag:
         return None
 
@@ -91,7 +112,7 @@ def classify_tag(tag):
             }
 
     # --------------------------------------------------------
-    # MIXERS / OBSTRUCTION
+    # MIXERS
     # --------------------------------------------------------
 
     mixer_keywords = [
@@ -128,7 +149,7 @@ def classify_tag(tag):
             }
 
     # --------------------------------------------------------
-    # HIGH-RISK PUBLIC LABELS
+    # HIGH-RISK
     # --------------------------------------------------------
 
     high_risk_keywords = [
@@ -161,18 +182,18 @@ def classify_tag(tag):
 
 def classify_address(address, tronscan_tag=None):
     """
-    Classify a TRON address.
+    Classification priority:
 
-    Priority:
     1. Curated verified local intelligence
-    2. TronScan public tag
+    2. TronScan public entity tag
     3. Unknown
     """
+
     if not address:
         return None
 
     # --------------------------------------------------------
-    # 1. CURATED VERIFIED DATABASE
+    # 1. LOCAL CURATED INTELLIGENCE
     # --------------------------------------------------------
 
     local_tag = is_tagged(address)
@@ -184,7 +205,7 @@ def classify_address(address, tronscan_tag=None):
         }
 
     # --------------------------------------------------------
-    # 2. TRONSCAN PUBLIC LABEL
+    # 2. PUBLIC TRONSCAN TAG
     # --------------------------------------------------------
 
     if tronscan_tag:
@@ -195,10 +216,6 @@ def classify_address(address, tronscan_tag=None):
         if public_classification:
             return public_classification
 
-    # --------------------------------------------------------
-    # 3. UNKNOWN
-    # --------------------------------------------------------
-
     return None
 
 
@@ -206,45 +223,69 @@ def classify_address(address, tronscan_tag=None):
 # HTTP HEADERS
 # ============================================================
 
-def get_headers():
+def get_tronscan_headers():
     headers = {}
 
     if TRONSCAN_API_KEY:
-        headers["TRON-PRO-API-KEY"] = TRONSCAN_API_KEY
+        headers["TRON-PRO-API-KEY"] = (
+            TRONSCAN_API_KEY
+        )
+
+    return headers
+
+
+def get_trongrid_headers():
+    headers = {}
+
+    if TRONGRID_API_KEY:
+        headers["TRON-PRO-API-KEY"] = (
+            TRONGRID_API_KEY
+        )
 
     return headers
 
 
 # ============================================================
-# TRONSCAN RATE-LIMIT-AWARE REQUEST
+# GENERIC RATE-LIMIT-AWARE REQUEST
 # ============================================================
 
-_LAST_REQUEST_TIME = 0.0
-
-
-def tronscan_get(
+def _perform_request(
     url,
     params,
+    headers,
     deadline,
-    max_attempts=3,
+    provider_name,
+    max_attempts=2,
 ):
     """
-    Perform a TronScan GET request with:
+    Perform a GET request with:
 
-    - API key header
     - request spacing
-    - 429 rate-limit handling
+    - 429 handling
     - Retry-After support
-    - exponential backoff
+    - bounded exponential backoff
     - overall deadline protection
     """
 
-    global _LAST_REQUEST_TIME
+    global _LAST_TRONSCAN_REQUEST_TIME
+    global _LAST_TRONGRID_REQUEST_TIME
+
+    if provider_name == "TronScan":
+        last_request_time = (
+            _LAST_TRONSCAN_REQUEST_TIME
+        )
+    else:
+        last_request_time = (
+            _LAST_TRONGRID_REQUEST_TIME
+        )
 
     last_response = None
 
     for attempt in range(max_attempts):
-        remaining = deadline - time.monotonic()
+        remaining = (
+            deadline
+            - time.monotonic()
+        )
 
         if remaining <= 0:
             raise requests.exceptions.Timeout(
@@ -255,54 +296,60 @@ def tronscan_get(
         # REQUEST SPACING
         # ----------------------------------------------------
 
-        elapsed_since_last_request = (
-            time.monotonic() - _LAST_REQUEST_TIME
+        elapsed = (
+            time.monotonic()
+            - last_request_time
         )
 
         if (
-            elapsed_since_last_request
+            elapsed
             < MIN_REQUEST_INTERVAL_SECONDS
         ):
-            spacing = (
+            wait_for = (
                 MIN_REQUEST_INTERVAL_SECONDS
-                - elapsed_since_last_request
+                - elapsed
             )
 
-            if spacing >= remaining:
+            if wait_for >= remaining:
                 raise requests.exceptions.Timeout(
                     "Overall tracing timeout reached."
                 )
 
-            time.sleep(spacing)
-
-        remaining = deadline - time.monotonic()
-
-        if remaining <= 0:
-            raise requests.exceptions.Timeout(
-                "Overall tracing timeout reached."
-            )
+            time.sleep(wait_for)
 
         # ----------------------------------------------------
-        # HTTP REQUEST
+        # REQUEST
         # ----------------------------------------------------
+
+        remaining = (
+            deadline
+            - time.monotonic()
+        )
 
         try:
             response = requests.get(
                 url,
                 params=params,
-                headers=get_headers(),
+                headers=headers,
                 timeout=min(
                     HTTP_TIMEOUT_SECONDS,
                     remaining,
                 ),
             )
         finally:
-            _LAST_REQUEST_TIME = time.monotonic()
+            now = time.monotonic()
+
+            if provider_name == "TronScan":
+                _LAST_TRONSCAN_REQUEST_TIME = now
+                last_request_time = now
+            else:
+                _LAST_TRONGRID_REQUEST_TIME = now
+                last_request_time = now
 
         last_response = response
 
         # ----------------------------------------------------
-        # SUCCESS / NORMAL ERROR
+        # NOT RATE LIMITED
         # ----------------------------------------------------
 
         if response.status_code != 429:
@@ -317,27 +364,34 @@ def tronscan_get(
         )
 
         try:
-            wait_seconds = float(retry_after)
-        except (TypeError, ValueError):
-            # Conservative exponential backoff when
-            # TronScan does not provide Retry-After.
-            wait_seconds = 2.0 * (attempt + 1)
+            wait_seconds = float(
+                retry_after
+            )
+        except (
+            TypeError,
+            ValueError,
+        ):
+            wait_seconds = 1.5 * (
+                attempt + 1
+            )
 
-        # Keep retries bounded.
         wait_seconds = max(
             1.0,
-            min(wait_seconds, 8.0),
+            min(wait_seconds, 6.0),
         )
 
-        remaining = deadline - time.monotonic()
+        remaining = (
+            deadline
+            - time.monotonic()
+        )
 
         if remaining <= wait_seconds:
             break
 
         print(
-            "TronScan HTTP 429 rate limit. "
-            f"Retrying in {wait_seconds:.1f}s "
-            f"(attempt {attempt + 1}/{max_attempts})..."
+            f"{provider_name} rate limited "
+            f"(429). Retrying in "
+            f"{wait_seconds:.1f}s..."
         )
 
         time.sleep(wait_seconds)
@@ -346,21 +400,79 @@ def tronscan_get(
 
 
 # ============================================================
+# TRONSCAN REQUEST
+# ============================================================
+
+def tronscan_get(
+    url,
+    params,
+    deadline,
+):
+    if not TRONSCAN_API_KEY:
+        return None
+
+    try:
+        response = _perform_request(
+            url=url,
+            params=params,
+            headers=get_tronscan_headers(),
+            deadline=deadline,
+            provider_name="TronScan",
+            max_attempts=2,
+        )
+
+        return response
+
+    except (
+        requests.exceptions.Timeout,
+        requests.exceptions.RequestException,
+    ):
+        return None
+
+
+# ============================================================
+# TRONGRID REQUEST
+# ============================================================
+
+def trongrid_get(
+    url,
+    params,
+    deadline,
+):
+    try:
+        response = _perform_request(
+            url=url,
+            params=params,
+            headers=get_trongrid_headers(),
+            deadline=deadline,
+            provider_name="TronGrid",
+            max_attempts=2,
+        )
+
+        return response
+
+    except (
+        requests.exceptions.Timeout,
+        requests.exceptions.RequestException,
+    ):
+        return None
+
+
+# ============================================================
 # TIMESTAMP EXTRACTION
 # ============================================================
 
 def extract_timestamp(transaction):
     """
-    Extract a transaction timestamp from TronScan data.
+    Extract a transaction timestamp.
 
     Supports:
     - Unix seconds
     - Unix milliseconds
     - numeric strings
-    - ISO-8601 datetime strings
+    - ISO-8601 strings
     - nested transaction objects
     - nested block objects
-    - nested trigger information
     """
 
     if not isinstance(transaction, dict):
@@ -389,11 +501,10 @@ def extract_timestamp(transaction):
         if value is None or value == "":
             continue
 
-        # ----------------------------------------------------
-        # NUMERIC TIMESTAMP
-        # ----------------------------------------------------
-
-        if isinstance(value, (int, float)):
+        if isinstance(
+            value,
+            (int, float),
+        ):
             try:
                 timestamp = float(value)
 
@@ -410,19 +521,15 @@ def extract_timestamp(transaction):
             ):
                 continue
 
-        # ----------------------------------------------------
-        # STRING TIMESTAMP
-        # ----------------------------------------------------
-
         if isinstance(value, str):
-            value_clean = value.strip()
+            cleaned = value.strip()
 
-            if not value_clean:
+            if not cleaned:
                 continue
 
             # Numeric string
             try:
-                timestamp = float(value_clean)
+                timestamp = float(cleaned)
 
                 if timestamp > 10_000_000_000:
                     timestamp /= 1000
@@ -437,13 +544,14 @@ def extract_timestamp(transaction):
             ):
                 pass
 
-            # ISO-8601 datetime
+            # ISO datetime
             try:
-                iso_value = value_clean
+                iso_value = cleaned
 
                 if iso_value.endswith("Z"):
                     iso_value = (
-                        iso_value[:-1] + "+00:00"
+                        iso_value[:-1]
+                        + "+00:00"
                     )
 
                 parsed = datetime.fromisoformat(
@@ -460,7 +568,7 @@ def extract_timestamp(transaction):
                 pass
 
     # --------------------------------------------------------
-    # COMMON NESTED OBJECTS
+    # NESTED OBJECTS
     # --------------------------------------------------------
 
     nested_objects = [
@@ -474,10 +582,15 @@ def extract_timestamp(transaction):
     ]
 
     for nested in nested_objects:
-        if not isinstance(nested, dict):
+        if not isinstance(
+            nested,
+            dict,
+        ):
             continue
 
-        result = extract_timestamp(nested)
+        result = extract_timestamp(
+            nested
+        )
 
         if result is not None:
             return result
@@ -488,7 +601,9 @@ def extract_timestamp(transaction):
 
     for value in transaction.values():
         if isinstance(value, dict):
-            result = extract_timestamp(value)
+            result = extract_timestamp(
+                value
+            )
 
             if result is not None:
                 return result
@@ -500,13 +615,9 @@ def extract_timestamp(transaction):
 # TRANSACTION EVIDENCE EXTRACTION
 # ============================================================
 
-def extract_transaction_evidence(transaction):
-    """
-    Extract transaction-level forensic evidence.
-
-    Missing fields remain None rather than being fabricated.
-    """
-
+def extract_transaction_evidence(
+    transaction
+):
     if not isinstance(transaction, dict):
         return {
             "transaction_hash": None,
@@ -546,46 +657,45 @@ def extract_transaction_evidence(transaction):
         "transaction_hash": transaction_hash,
         "transaction_id": transaction_id,
         "block_number": block_number,
-        "transaction_timestamp": transaction_timestamp,
+        "transaction_timestamp": (
+            transaction_timestamp
+        ),
     }
 
 
 # ============================================================
-# RAPID-HOP DETECTION
-# ============================================================
-
-def calculate_rapid_hop(
-    previous_timestamp,
-    current_timestamp,
-):
-    if previous_timestamp is None:
-        return False
-
-    if current_timestamp is None:
-        return False
-
-    time_difference = abs(
-        current_timestamp - previous_timestamp
-    )
-
-    return (
-        time_difference
-        <= RAPID_HOP_SECONDS
-    )
-
-
-# ============================================================
-# TOKEN AMOUNT EXTRACTION
+# TRC20 TOKEN EXTRACTION
 # ============================================================
 
 def extract_token_amount(transfer):
+    """
+    Extract token data from normalized TronScan
+    or TronGrid transfer objects.
+    """
+
     token_info = transfer.get(
         "tokenInfo",
         {},
     )
 
-    if not isinstance(token_info, dict):
+    if not isinstance(
+        token_info,
+        dict,
+    ):
         token_info = {}
+
+    # TronGrid uses token_info.
+    if not token_info:
+        token_info = transfer.get(
+            "token_info",
+            {},
+        )
+
+        if not isinstance(
+            token_info,
+            dict,
+        ):
+            token_info = {}
 
     token_symbol = (
         token_info.get("tokenAbbr")
@@ -593,40 +703,49 @@ def extract_token_amount(transfer):
         or token_info.get("symbol")
     )
 
-    decimals = token_info.get(
-        "tokenDecimal"
+    decimals = (
+        token_info.get("tokenDecimal")
+        if token_info.get(
+            "tokenDecimal"
+        ) is not None
+        else token_info.get("decimals")
     )
-
-    if decimals is None:
-        decimals = token_info.get(
-            "decimals"
-        )
 
     raw_amount = None
 
+    # TronScan format
     trigger_info = transfer.get(
         "trigger_info",
         {},
     )
 
-    if not isinstance(trigger_info, dict):
-        trigger_info = {}
+    if isinstance(
+        trigger_info,
+        dict,
+    ):
+        parameter = trigger_info.get(
+            "parameter",
+            {},
+        )
 
-    parameter = trigger_info.get(
-        "parameter",
-        {},
-    )
+        if isinstance(
+            parameter,
+            dict,
+        ):
+            raw_amount = parameter.get(
+                "value"
+            )
 
-    if not isinstance(parameter, dict):
-        parameter = {}
-
-    raw_amount = parameter.get(
-        "value"
-    )
-
+    # TronScan fallback
     if raw_amount is None:
         raw_amount = transfer.get(
             "quant"
+        )
+
+    # TronGrid format
+    if raw_amount is None:
+        raw_amount = transfer.get(
+            "value"
         )
 
     amount = None
@@ -660,6 +779,490 @@ def extract_token_amount(transfer):
 
 
 # ============================================================
+# NORMALIZE TRONGRID TRC20 TRANSFER
+# ============================================================
+
+def normalize_trongrid_trc20_transfer(
+    transfer
+):
+    """
+    Convert TronGrid's TRC20 response shape into
+    the internal transfer format used by the tracer.
+    """
+
+    if not isinstance(
+        transfer,
+        dict,
+    ):
+        return None
+
+    token_info = transfer.get(
+        "token_info",
+        {},
+    )
+
+    if not isinstance(
+        token_info,
+        dict,
+    ):
+        token_info = {}
+
+    transaction_id = (
+        transfer.get("transaction_id")
+        or transfer.get("transactionId")
+        or transfer.get("txID")
+        or transfer.get("txid")
+        or transfer.get("hash")
+    )
+
+    from_address = (
+        transfer.get("from")
+        or transfer.get("from_address")
+        or transfer.get("fromAddress")
+    )
+
+    to_address = (
+        transfer.get("to")
+        or transfer.get("to_address")
+        or transfer.get("toAddress")
+    )
+
+    contract_address = (
+        token_info.get("address")
+        or token_info.get("contract_address")
+        or transfer.get("contract_address")
+    )
+
+    symbol = (
+        token_info.get("symbol")
+        or token_info.get("tokenAbbr")
+        or token_info.get("name")
+    )
+
+    decimals = (
+        token_info.get("decimals")
+        if token_info.get(
+            "decimals"
+        ) is not None
+        else token_info.get(
+            "tokenDecimal"
+        )
+    )
+
+    raw_value = (
+        transfer.get("value")
+        if transfer.get("value") is not None
+        else transfer.get("quant")
+    )
+
+    return {
+        "from_address": from_address,
+        "to_address": to_address,
+        "transaction_id": transaction_id,
+        "transaction_hash": transaction_id,
+        "block_timestamp": transfer.get(
+            "block_timestamp"
+        ),
+        "tokenInfo": {
+            "symbol": symbol,
+            "tokenAbbr": symbol,
+            "decimals": decimals,
+            "tokenDecimal": decimals,
+            "address": contract_address,
+        },
+        "quant": raw_value,
+        "value": raw_value,
+        "contract_address": contract_address,
+        "confirmed": transfer.get(
+            "confirmed"
+        ),
+    }
+
+
+# ============================================================
+# NORMALIZE TRONGRID TRX TRANSACTION
+# ============================================================
+
+def normalize_trongrid_trx_transaction(
+    transaction
+):
+    """
+    Convert TronGrid TRX transaction data into the
+    internal format used by the tracer.
+    """
+
+    if not isinstance(
+        transaction,
+        dict,
+    ):
+        return None
+
+    transaction_id = (
+        transaction.get("txID")
+        or transaction.get("transaction_id")
+        or transaction.get("transactionId")
+        or transaction.get("hash")
+    )
+
+    from_address = (
+        transaction.get("from")
+        or transaction.get("fromAddress")
+        or transaction.get("from_address")
+    )
+
+    to_address = (
+        transaction.get("to")
+        or transaction.get("toAddress")
+        or transaction.get("to_address")
+    )
+
+    return {
+        "fromAddress": from_address,
+        "toAddress": to_address,
+        "transaction_id": transaction_id,
+        "transaction_hash": transaction_id,
+        "block_timestamp": transaction.get(
+            "block_timestamp"
+        ),
+        "blockNumber": transaction.get(
+            "block"
+        ) or transaction.get(
+            "blockNumber"
+        ),
+        "value": transaction.get(
+            "value"
+        ),
+        "confirmed": transaction.get(
+            "confirmed"
+        ),
+    }
+
+
+# ============================================================
+# FETCH TRC20 TRANSFERS
+# ============================================================
+
+def fetch_trc20_transfers(
+    address,
+    direction,
+    deadline,
+):
+    """
+    Fetch TRC20 transfers.
+
+    Primary source:
+        TronScan
+
+    Fallback:
+        TronGrid
+
+    direction:
+        "from" -> outgoing
+        "to"   -> incoming
+    """
+
+    # ========================================================
+    # 1. TRONSCAN
+    # ========================================================
+
+    if TRONSCAN_API_KEY:
+        params = {
+            "limit": MAX_TRANSACTIONS_PER_HOP,
+        }
+
+        if direction == "from":
+            params["fromAddress"] = address
+        else:
+            params["toAddress"] = address
+
+        response = tronscan_get(
+            TRONSCAN_TRC20_URL,
+            params=params,
+            deadline=deadline,
+        )
+
+        if response is not None:
+            try:
+                response.raise_for_status()
+
+                data = response.json()
+
+                transfers = data.get(
+                    "token_transfers",
+                    [],
+                )
+
+                if not transfers:
+                    transfers = data.get(
+                        "data",
+                        [],
+                    )
+
+                if isinstance(
+                    transfers,
+                    list,
+                ):
+                    return {
+                        "ok": True,
+                        "source": "tronscan",
+                        "transfers": transfers,
+                        "error": None,
+                    }
+
+            except (
+                requests.exceptions.RequestException,
+                ValueError,
+            ):
+                pass
+
+        print(
+            "TronScan unavailable/rate-limited. "
+            "Falling back to TronGrid."
+        )
+
+    # ========================================================
+    # 2. TRONGRID FALLBACK
+    # ========================================================
+
+    remaining = (
+        deadline
+        - time.monotonic()
+    )
+
+    if remaining <= 0:
+        return {
+            "ok": False,
+            "source": None,
+            "transfers": [],
+            "error": "timeout",
+        }
+
+    url = TRONGRID_TRC20_URL.format(
+        address=address
+    )
+
+    params = {
+        "limit": MAX_TRANSACTIONS_PER_HOP,
+        "only_confirmed": "true",
+        "order_by": "block_timestamp,desc",
+    }
+
+    if direction == "from":
+        params["only_from"] = "true"
+    else:
+        params["only_to"] = "true"
+
+    response = trongrid_get(
+        url,
+        params=params,
+        deadline=deadline,
+    )
+
+    if response is None:
+        return {
+            "ok": False,
+            "source": "trongrid",
+            "transfers": [],
+            "error": (
+                "TronGrid request failed."
+            ),
+        }
+
+    try:
+        response.raise_for_status()
+
+        data = response.json()
+
+    except (
+        requests.exceptions.RequestException,
+        ValueError,
+    ) as exc:
+        return {
+            "ok": False,
+            "source": "trongrid",
+            "transfers": [],
+            "error": str(exc),
+        }
+
+    raw_transfers = data.get(
+        "data",
+        [],
+    )
+
+    transfers = []
+
+    for transfer in raw_transfers:
+        normalized = (
+            normalize_trongrid_trc20_transfer(
+                transfer
+            )
+        )
+
+        if normalized is not None:
+            transfers.append(
+                normalized
+            )
+
+    return {
+        "ok": True,
+        "source": "trongrid",
+        "transfers": transfers,
+        "error": None,
+    }
+
+
+# ============================================================
+# FETCH TRX TRANSFERS
+# ============================================================
+
+def fetch_trx_transactions(
+    address,
+    deadline,
+):
+    """
+    Fetch normal TRX transactions.
+
+    Primary:
+        TronScan
+
+    Fallback:
+        TronGrid
+    """
+
+    # ========================================================
+    # 1. TRONSCAN
+    # ========================================================
+
+    if TRONSCAN_API_KEY:
+        response = tronscan_get(
+            TRONSCAN_TX_URL,
+            params={
+                "fromAddress": address,
+                "sort": "-timestamp",
+                "limit": MAX_TRANSACTIONS_PER_HOP,
+            },
+            deadline=deadline,
+        )
+
+        if response is not None:
+            try:
+                response.raise_for_status()
+
+                data = response.json()
+
+                transactions = data.get(
+                    "data",
+                    [],
+                )
+
+                if isinstance(
+                    transactions,
+                    list,
+                ):
+                    return {
+                        "ok": True,
+                        "source": "tronscan",
+                        "transactions": transactions,
+                        "error": None,
+                    }
+
+            except (
+                requests.exceptions.RequestException,
+                ValueError,
+            ):
+                pass
+
+        print(
+            "TronScan TRX endpoint unavailable. "
+            "Falling back to TronGrid."
+        )
+
+    # ========================================================
+    # 2. TRONGRID
+    # ========================================================
+
+    remaining = (
+        deadline
+        - time.monotonic()
+    )
+
+    if remaining <= 0:
+        return {
+            "ok": False,
+            "source": None,
+            "transactions": [],
+            "error": "timeout",
+        }
+
+    url = TRONGRID_TRX_URL.format(
+        address=address
+    )
+
+    response = trongrid_get(
+        url,
+        params={
+            "only_confirmed": "true",
+            "only_from": "true",
+            "limit": MAX_TRANSACTIONS_PER_HOP,
+            "order_by": "block_timestamp,desc",
+        },
+        deadline=deadline,
+    )
+
+    if response is None:
+        return {
+            "ok": False,
+            "source": "trongrid",
+            "transactions": [],
+            "error": (
+                "TronGrid request failed."
+            ),
+        }
+
+    try:
+        response.raise_for_status()
+
+        data = response.json()
+
+    except (
+        requests.exceptions.RequestException,
+        ValueError,
+    ) as exc:
+        return {
+            "ok": False,
+            "source": "trongrid",
+            "transactions": [],
+            "error": str(exc),
+        }
+
+    raw_transactions = data.get(
+        "data",
+        [],
+    )
+
+    transactions = []
+
+    for transaction in raw_transactions:
+        normalized = (
+            normalize_trongrid_trx_transaction(
+                transaction
+            )
+        )
+
+        if normalized is not None:
+            transactions.append(
+                normalized
+            )
+
+    return {
+        "ok": True,
+        "source": "trongrid",
+        "transactions": transactions,
+        "error": None,
+    }
+
+
+# ============================================================
 # TRC20 FAN-IN DETECTION
 # ============================================================
 
@@ -668,67 +1271,44 @@ def detect_trc20_fan_in(
     deadline,
 ):
     """
-    Detect whether multiple unique wallets sent TRC20
-    tokens into this address.
+    Detect whether multiple unique wallets sent
+    TRC20 tokens into the address.
 
-    Behavioral indicator only.
-    It does NOT establish fraudulent activity.
+    This is a behavioral indicator only.
+    It does not establish fraudulent activity.
     """
 
-    try:
-        response = tronscan_get(
-            TRONSCAN_TRC20_URL,
-            params={
-                "toAddress": address,
-                "limit": MAX_TRANSACTIONS_PER_HOP,
-            },
-            deadline=deadline,
-        )
-
-        response.raise_for_status()
-        data = response.json()
-
-    except requests.exceptions.Timeout:
-        return {
-            "fan_in": False,
-            "incoming_senders": [],
-            "incoming_count": 0,
-        }
-
-    except requests.exceptions.RequestException:
-        return {
-            "fan_in": False,
-            "incoming_senders": [],
-            "incoming_count": 0,
-        }
-
-    except ValueError:
-        return {
-            "fan_in": False,
-            "incoming_senders": [],
-            "incoming_count": 0,
-        }
-
-    transfers = data.get(
-        "token_transfers",
-        [],
+    result = fetch_trc20_transfers(
+        address=address,
+        direction="to",
+        deadline=deadline,
     )
 
-    if not transfers:
-        transfers = data.get(
-            "data",
-            [],
-        )
+    if not result.get("ok"):
+        return {
+            "fan_in": False,
+            "incoming_senders": [],
+            "incoming_count": 0,
+        }
+
+    transfers = result.get(
+        "transfers",
+        [],
+    )
 
     senders = set()
 
     for transfer in transfers:
-        if not isinstance(transfer, dict):
+        if not isinstance(
+            transfer,
+            dict,
+        ):
             continue
 
         sender = (
             transfer.get("from_address")
             or transfer.get("fromAddress")
+            or transfer.get("from")
         )
 
         if not sender:
@@ -744,7 +1324,9 @@ def detect_trc20_fan_in(
             sender.lower()
         )
 
-    incoming_count = len(senders)
+    incoming_count = len(
+        senders
+    )
 
     fan_in = (
         incoming_count
@@ -768,7 +1350,9 @@ def detect_trc20_fan_in(
 
     return {
         "fan_in": fan_in,
-        "incoming_senders": list(senders),
+        "incoming_senders": list(
+            senders
+        ),
         "incoming_count": incoming_count,
     }
 
@@ -790,18 +1374,21 @@ def trace_wallet(
     # API KEY CHECK
     # ========================================================
 
-    if not TRONSCAN_API_KEY:
+    if (
+        not TRONSCAN_API_KEY
+        and not TRONGRID_API_KEY
+    ):
         return {
             "matched": False,
             "reason": "api_error",
             "detail": (
-                "TRONSCAN_API_KEY is missing "
-                "from .env"
+                "Both TRONSCAN_API_KEY and "
+                "TRONGRID_API_KEY are missing."
             ),
         }
 
     # ========================================================
-    # INITIALIZE STATE
+    # INITIALIZE
     # ========================================================
 
     if _deadline is None:
@@ -834,7 +1421,7 @@ def trace_wallet(
     )
 
     # ========================================================
-    # TIMEOUT CHECK
+    # TIMEOUT
     # ========================================================
 
     if time.monotonic() >= _deadline:
@@ -847,7 +1434,7 @@ def trace_wallet(
         }
 
     # ========================================================
-    # DEPTH CHECK
+    # DEPTH
     # ========================================================
 
     if depth >= max_depth:
@@ -870,7 +1457,7 @@ def trace_wallet(
     high_risk_entity = False
 
     # ========================================================
-    # INCOMING FAN-IN
+    # FAN-IN
     # ========================================================
 
     fan_in_data = detect_trc20_fan_in(
@@ -884,72 +1471,34 @@ def trace_wallet(
     )
 
     # ========================================================
-    # TRC20 OUTGOING TRANSFERS
+    # OUTGOING TRC20
     # ========================================================
 
-    try:
-        remaining = (
-            _deadline
-            - time.monotonic()
-        )
-
-        if remaining <= 0:
-            return {
-                "matched": False,
-                "reason": "timeout",
-                "detail": "No time remaining.",
-            }
-
-        response = tronscan_get(
-            TRONSCAN_TRC20_URL,
-            params={
-                "fromAddress": address,
-                "limit": MAX_TRANSACTIONS_PER_HOP,
-            },
-            deadline=_deadline,
-        )
-
-        response.raise_for_status()
-        data = response.json()
-
-    except requests.exceptions.Timeout as e:
-        return {
-            "matched": False,
-            "reason": "timeout",
-            "detail": str(e),
-            "fan_in": fan_in,
-        }
-
-    except requests.exceptions.RequestException as e:
-        return {
-            "matched": False,
-            "reason": "api_error",
-            "detail": str(e),
-            "fan_in": fan_in,
-        }
-
-    except ValueError:
-        return {
-            "matched": False,
-            "reason": "api_error",
-            "detail": "invalid_json_response",
-            "fan_in": fan_in,
-        }
-
-    transfers = data.get(
-        "token_transfers",
-        [],
+    trc20_result = fetch_trc20_transfers(
+        address=address,
+        direction="from",
+        deadline=_deadline,
     )
 
-    if not transfers:
-        transfers = data.get(
-            "data",
+    if trc20_result.get("ok"):
+        transfers = trc20_result.get(
+            "transfers",
             [],
         )
+    else:
+        return {
+            "matched": False,
+            "reason": "api_error",
+            "detail": trc20_result.get(
+                "error"
+            ),
+            "fan_in": fan_in,
+        }
 
     print(
         f"\nFound {len(transfers)} TRC20 transfers "
-        f"at depth {depth}."
+        f"at depth {depth} "
+        f"(source: {trc20_result.get('source')})."
     )
 
     # ========================================================
@@ -959,12 +1508,16 @@ def trace_wallet(
     destinations = set()
 
     for transfer in transfers:
-        if not isinstance(transfer, dict):
+        if not isinstance(
+            transfer,
+            dict,
+        ):
             continue
 
         destination = (
             transfer.get("to_address")
             or transfer.get("toAddress")
+            or transfer.get("to")
         )
 
         if destination:
@@ -987,7 +1540,7 @@ def trace_wallet(
         )
 
     # ========================================================
-    # INSPECT TRC20 TRANSFERS
+    # INSPECT TRC20
     # ========================================================
 
     for transfer in transfers[
@@ -1004,36 +1557,33 @@ def trace_wallet(
                 "fan_out": fan_out,
             }
 
-        if not isinstance(transfer, dict):
+        if not isinstance(
+            transfer,
+            dict,
+        ):
             continue
 
         # ----------------------------------------------------
         # ADDRESSES
         # ----------------------------------------------------
 
-        from_address = transfer.get(
-            "from_address"
+        from_address = (
+            transfer.get("from_address")
+            or transfer.get("fromAddress")
+            or transfer.get("from")
         )
 
-        to_address = transfer.get(
-            "to_address"
+        to_address = (
+            transfer.get("to_address")
+            or transfer.get("toAddress")
+            or transfer.get("to")
         )
-
-        if not from_address:
-            from_address = transfer.get(
-                "fromAddress"
-            )
-
-        if not to_address:
-            to_address = transfer.get(
-                "toAddress"
-            )
 
         if not to_address:
             continue
 
         # ----------------------------------------------------
-        # TRANSACTION EVIDENCE
+        # EVIDENCE
         # ----------------------------------------------------
 
         transaction_evidence = (
@@ -1046,8 +1596,10 @@ def trace_wallet(
         # TIMESTAMP
         # ----------------------------------------------------
 
-        current_timestamp = extract_timestamp(
-            transfer
+        current_timestamp = (
+            extract_timestamp(
+                transfer
+            )
         )
 
         rapid_hop = calculate_rapid_hop(
@@ -1094,7 +1646,6 @@ def trace_wallet(
                     "tag"
                 )
             )
-
         elif isinstance(
             from_tag_info,
             str,
@@ -1116,7 +1667,6 @@ def trace_wallet(
                     "tag"
                 )
             )
-
         elif isinstance(
             to_tag_info,
             str,
@@ -1124,7 +1674,7 @@ def trace_wallet(
             to_tag = to_tag_info
 
         # ----------------------------------------------------
-        # TOKEN INFORMATION
+        # TOKEN
         # ----------------------------------------------------
 
         token_data = extract_token_amount(
@@ -1151,26 +1701,28 @@ def trace_wallet(
         # CONTRACT
         # ----------------------------------------------------
 
-        trigger_info = transfer.get(
-            "trigger_info",
-            {},
+        contract_address = (
+            transfer.get(
+                "contract_address"
+            )
         )
 
-        if isinstance(
-            trigger_info,
-            dict,
-        ):
-            contract_address = (
-                trigger_info.get(
-                    "contract_address"
-                )
-            )
-        else:
-            contract_address = None
-
         if not contract_address:
-            contract_address = transfer.get(
-                "contract_address"
+            token_info = transfer.get(
+                "tokenInfo",
+                {},
+            )
+
+            if not isinstance(
+                token_info,
+                dict,
+            ):
+                token_info = {}
+
+            contract_address = (
+                token_info.get(
+                    "address"
+                )
             )
 
         # ----------------------------------------------------
@@ -1186,9 +1738,11 @@ def trace_wallet(
         # SENDER CLASSIFICATION
         # ----------------------------------------------------
 
-        sender_classification = classify_address(
-            from_address,
-            from_tag,
+        sender_classification = (
+            classify_address(
+                from_address,
+                from_tag,
+            )
         )
 
         if sender_classification:
@@ -1212,9 +1766,11 @@ def trace_wallet(
         # DESTINATION CLASSIFICATION
         # ----------------------------------------------------
 
-        recipient_classification = classify_address(
-            to_address,
-            to_tag,
+        recipient_classification = (
+            classify_address(
+                to_address,
+                to_tag,
+            )
         )
 
         # ====================================================
@@ -1279,18 +1835,20 @@ def trace_wallet(
                 "amount": amount,
                 "raw_amount": raw_amount,
                 "decimals": decimals,
-                "contract_address": contract_address,
+                "contract_address": (
+                    contract_address
+                ),
                 "from_address": from_address,
                 "to_address": to_address,
-                "risk_transaction": risk_transaction,
+                "risk_transaction": (
+                    risk_transaction
+                ),
                 "rapid_hops": rapid_hops,
                 "fan_out": fan_out,
                 "fan_in": fan_in,
                 "high_risk_entity": (
                     high_risk_entity
                 ),
-
-                # FORENSIC EVIDENCE
                 "transaction_hash": (
                     transaction_evidence.get(
                         "transaction_hash"
@@ -1326,7 +1884,7 @@ def trace_wallet(
             )
 
         # ----------------------------------------------------
-        # CONTINUE TRACING
+        # CONTINUE TRACE
         # ----------------------------------------------------
 
         normalized_destination = (
@@ -1334,8 +1892,7 @@ def trace_wallet(
         )
 
         if (
-            to_address
-            and normalized_destination
+            normalized_destination
             not in _visited
             and depth + 1 < max_depth
         ):
@@ -1406,78 +1963,53 @@ def trace_wallet(
     # NORMAL TRX TRANSACTIONS
     # ========================================================
 
-    try:
-        remaining = (
-            _deadline
-            - time.monotonic()
-        )
+    trx_result = fetch_trx_transactions(
+        address=address,
+        deadline=_deadline,
+    )
 
-        if remaining <= 0:
-            return {
-                "matched": False,
-                "reason": "timeout",
-                "detail": "No time remaining.",
-                "fan_in": fan_in,
-                "fan_out": fan_out,
-            }
-
-        response = tronscan_get(
-            TRONSCAN_TX_URL,
-            params={
-                "fromAddress": address,
-                "sort": "-timestamp",
-                "limit": MAX_TRANSACTIONS_PER_HOP,
-            },
-            deadline=_deadline,
-        )
-
-        response.raise_for_status()
-        data = response.json()
-
-    except requests.exceptions.Timeout as e:
-        return {
-            "matched": False,
-            "reason": "timeout",
-            "detail": str(e),
-            "fan_in": fan_in,
-            "fan_out": fan_out,
-        }
-
-    except requests.exceptions.RequestException as e:
+    if not trx_result.get("ok"):
         return {
             "matched": False,
             "reason": "api_error",
-            "detail": str(e),
+            "detail": trx_result.get(
+                "error"
+            ),
             "fan_in": fan_in,
             "fan_out": fan_out,
+            "rapid_hops": rapid_hops,
+            "high_risk_entity": (
+                high_risk_entity
+            ),
         }
 
-    except ValueError:
-        return {
-            "matched": False,
-            "reason": "api_error",
-            "detail": "invalid_json_response",
-            "fan_in": fan_in,
-            "fan_out": fan_out,
-        }
-
-    transactions = data.get(
-        "data",
+    transactions = trx_result.get(
+        "transactions",
         [],
     )
 
+    print(
+        f"Found {len(transactions)} TRX transactions "
+        f"at depth {depth} "
+        f"(source: {trx_result.get('source')})."
+    )
+
     # ========================================================
-    # NORMAL TRX FAN-OUT
+    # TRX FAN-OUT
     # ========================================================
 
     normal_destinations = set()
 
     for tx in transactions:
-        if not isinstance(tx, dict):
+        if not isinstance(
+            tx,
+            dict,
+        ):
             continue
 
-        destination = tx.get(
-            "toAddress"
+        destination = (
+            tx.get("toAddress")
+            or tx.get("to_address")
         )
 
         if destination:
@@ -1500,24 +2032,28 @@ def trace_wallet(
         )
 
     # ========================================================
-    # INSPECT NORMAL TRX TRANSACTIONS
+    # INSPECT NORMAL TRX
     # ========================================================
 
     for tx in transactions[
         :MAX_TRANSACTIONS_PER_HOP
     ]:
-        if not isinstance(tx, dict):
+        if not isinstance(
+            tx,
+            dict,
+        ):
             continue
 
-        destination = tx.get(
-            "toAddress"
+        destination = (
+            tx.get("toAddress")
+            or tx.get("to_address")
         )
 
         if not destination:
             continue
 
         # ----------------------------------------------------
-        # TRANSACTION EVIDENCE
+        # EVIDENCE
         # ----------------------------------------------------
 
         transaction_evidence = (
@@ -1530,8 +2066,8 @@ def trace_wallet(
         # TIMESTAMP
         # ----------------------------------------------------
 
-        current_timestamp = extract_timestamp(
-            tx
+        current_timestamp = (
+            extract_timestamp(tx)
         )
 
         rapid_hop = calculate_rapid_hop(
@@ -1547,16 +2083,12 @@ def trace_wallet(
             )
 
         # ----------------------------------------------------
-        # TRONSCAN TAG
+        # PUBLIC TAG
         # ----------------------------------------------------
 
         destination_tag = tx.get(
             "toAddressTag"
         )
-
-        # ----------------------------------------------------
-        # DESTINATION CLASSIFICATION
-        # ----------------------------------------------------
 
         tag_info = classify_address(
             destination,
@@ -1629,8 +2161,6 @@ def trace_wallet(
                 ),
                 "from_address": address,
                 "to_address": destination,
-
-                # FORENSIC EVIDENCE
                 "transaction_hash": (
                     transaction_evidence.get(
                         "transaction_hash"
@@ -1654,7 +2184,7 @@ def trace_wallet(
             }
 
         # ----------------------------------------------------
-        # CONTINUE TRACING
+        # CONTINUE TRACE
         # ----------------------------------------------------
 
         normalized_destination = (
@@ -1662,8 +2192,7 @@ def trace_wallet(
         )
 
         if (
-            destination
-            and normalized_destination
+            normalized_destination
             not in _visited
             and depth + 1 < max_depth
         ):
@@ -1749,3 +2278,28 @@ def trace_wallet(
             high_risk_entity
         ),
     }
+
+
+# ============================================================
+# RAPID-HOP DETECTION
+# ============================================================
+
+def calculate_rapid_hop(
+    previous_timestamp,
+    current_timestamp,
+):
+    if previous_timestamp is None:
+        return False
+
+    if current_timestamp is None:
+        return False
+
+    difference = abs(
+        current_timestamp
+        - previous_timestamp
+    )
+
+    return (
+        difference
+        <= RAPID_HOP_SECONDS
+    )

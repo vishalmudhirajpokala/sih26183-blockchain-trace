@@ -1,43 +1,95 @@
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+# main.py
+
+import os
 from pathlib import Path
+from typing import Any, Dict, Optional
+
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
+from reportlab.lib import colors
+from reportlab.lib.enums import TA_LEFT
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import mm
+from reportlab.platypus import (
+    SimpleDocTemplate,
+    Paragraph,
+    Spacer,
+    Table,
+    TableStyle,
+    KeepTogether,
+)
 
 from trace import trace_wallet
-from report import generate_report
-from risk_engine import calculate_risk
-
-
-app = FastAPI()
 
 
 # ============================================================
-# REPORT DIRECTORY
+# ENVIRONMENT
 # ============================================================
 
-reports_dir = Path("reports")
-reports_dir.mkdir(exist_ok=True)
+load_dotenv()
 
-app.mount(
-    "/reports",
-    StaticFiles(directory="reports"),
-    name="reports"
+
+# ============================================================
+# APP
+# ============================================================
+
+app = FastAPI(
+    title="BlockTrace Investigation API",
+    description=(
+        "TRON blockchain investigation and fund-flow tracing API."
+    ),
+    version="1.0.0",
 )
 
 
 # ============================================================
 # CORS
 # ============================================================
+#
+# For the SIH prototype we allow cross-origin requests so the
+# Vercel frontend can communicate with the Render backend.
+#
+# No browser credentials/cookies are used by this API.
+#
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173"
-    ],
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
+)
+
+
+# ============================================================
+# PATHS
+# ============================================================
+
+BASE_DIR = Path(__file__).resolve().parent
+
+REPORTS_DIR = BASE_DIR / "reports"
+REPORTS_DIR.mkdir(
+    parents=True,
+    exist_ok=True,
+)
+
+REPORT_FILE = REPORTS_DIR / "trace_report.pdf"
+
+
+# ============================================================
+# STATIC REPORT FILES
+# ============================================================
+
+app.mount(
+    "/reports",
+    StaticFiles(
+        directory=str(REPORTS_DIR)
+    ),
+    name="reports",
 )
 
 
@@ -46,7 +98,1125 @@ app.add_middleware(
 # ============================================================
 
 class TraceRequest(BaseModel):
-    address: str
+    address: str = Field(
+        ...,
+        min_length=34,
+        max_length=34,
+        description="TRON wallet address",
+    )
+
+
+# ============================================================
+# HELPERS
+# ============================================================
+
+def is_valid_tron_address(
+    address: str,
+) -> bool:
+    """
+    Basic TRON address validation.
+
+    TRON base58 addresses begin with 'T' and are 34
+    characters long.
+    """
+    if not isinstance(address, str):
+        return False
+
+    address = address.strip()
+
+    if len(address) != 34:
+        return False
+
+    return (
+        address.startswith("T")
+        and all(
+            character.isalnum()
+            for character in address
+        )
+    )
+
+
+def safe_number(
+    value: Any,
+    default: Any = None,
+):
+    return (
+        value
+        if value is not None
+        else default
+    )
+
+
+def determine_result_type(
+    trace_result: Dict[str, Any],
+) -> str:
+    """
+    Convert the internal trace classification into the
+    frontend/API result vocabulary.
+    """
+
+    if not trace_result.get("matched"):
+        return "inconclusive"
+
+    tag = trace_result.get(
+        "tag",
+        {},
+    )
+
+    if not isinstance(tag, dict):
+        return "identified"
+
+    entity_type = str(
+        tag.get(
+            "type",
+            ""
+        )
+    ).lower()
+
+    if entity_type == "exchange":
+        return "exchange_identified"
+
+    if entity_type == "mixer":
+        return "mixer_identified"
+
+    if entity_type == "sanctioned":
+        return "sanctioned"
+
+    if entity_type == "high_risk":
+        return "high_risk_entity"
+
+    return "identified"
+
+
+def determine_confidence(
+    trace_result: Dict[str, Any],
+) -> int:
+    """
+    Prefer confidence supplied by the entity intelligence.
+
+    For the current prototype, a known exchange destination
+    without an explicit confidence value is treated as a
+    high-confidence public entity attribution.
+
+    This confidence represents entity attribution strength,
+    not criminality probability.
+    """
+
+    tag = trace_result.get(
+        "tag",
+        {},
+    )
+
+    if isinstance(tag, dict):
+        supplied = tag.get(
+            "confidence"
+        )
+
+        if supplied is not None:
+            try:
+                return max(
+                    0,
+                    min(
+                        100,
+                        int(supplied),
+                    ),
+                )
+            except (
+                ValueError,
+                TypeError,
+            ):
+                pass
+
+        if tag.get("type") == "exchange":
+            return 95
+
+        if tag.get("type") in {
+            "sanctioned",
+            "mixer",
+        }:
+            return 90
+
+        if tag.get("type") == "high_risk":
+            return 80
+
+        return 75
+
+    return 0
+
+
+def calculate_risk(
+    trace_result: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Transparent prototype risk scoring.
+
+    This is a triage indicator, not a probability of guilt.
+    """
+
+    score = 0
+    indicators = []
+
+    result_type = determine_result_type(
+        trace_result
+    )
+
+    # --------------------------------------------------------
+    # KNOWN DESTINATION
+    # --------------------------------------------------------
+
+    if result_type == "exchange_identified":
+        score += 10
+
+        indicators.append(
+            "Funds reached a known cryptocurrency exchange"
+        )
+
+    if result_type == "mixer_identified":
+        score += 30
+
+        indicators.append(
+            "Trace reached a known mixing-related destination"
+        )
+
+    if result_type == "sanctioned":
+        score += 45
+
+        indicators.append(
+            "Funds reached a sanctioned entity"
+        )
+
+    if result_type == "high_risk_entity":
+        score += 35
+
+        indicators.append(
+            "Funds reached a known high-risk entity"
+        )
+
+    # --------------------------------------------------------
+    # FAN-IN
+    # --------------------------------------------------------
+
+    if trace_result.get(
+        "fan_in",
+        False,
+    ):
+        score += 8
+
+        indicators.append(
+            "Funds from multiple wallets were consolidated"
+        )
+
+    # --------------------------------------------------------
+    # FAN-OUT
+    # --------------------------------------------------------
+
+    if trace_result.get(
+        "fan_out",
+        False,
+    ):
+        score += 5
+
+        indicators.append(
+            "Funds were dispersed across multiple wallets"
+        )
+
+    # --------------------------------------------------------
+    # RAPID MOVEMENT
+    # --------------------------------------------------------
+
+    if trace_result.get(
+        "rapid_hops",
+        False,
+    ):
+        score += 7
+
+        indicators.append(
+            "Rapid successive fund movement was observed"
+        )
+
+    # --------------------------------------------------------
+    # LARGE TRANSFER
+    # --------------------------------------------------------
+
+    amount = trace_result.get(
+        "amount"
+    )
+
+    try:
+        if amount is not None:
+            numeric_amount = float(amount)
+
+            # Prototype-level generic threshold.
+            # It is deliberately not presented as a
+            # chain-wide financial crime threshold.
+            if numeric_amount >= 1_000_000:
+                score += 7
+
+                indicators.append(
+                    "Unusually large token transfer detected"
+                )
+
+    except (
+        ValueError,
+        TypeError,
+    ):
+        pass
+
+    score = min(
+        100,
+        max(
+            0,
+            score,
+        ),
+    )
+
+    # --------------------------------------------------------
+    # LEVEL
+    # --------------------------------------------------------
+
+    if score >= 70:
+        level = "HIGH"
+    elif score >= 40:
+        level = "MEDIUM-HIGH"
+    elif score >= 20:
+        level = "MEDIUM"
+    else:
+        level = "LOW"
+
+    if not indicators:
+        indicators.append(
+            "No significant high-risk indicators were detected"
+        )
+
+    assessment = (
+        "Some risk indicators were detected. "
+        "Additional transaction analysis is recommended."
+        if score >= 20
+        else
+        "No significant high-risk indicators were detected "
+        "in the analyzed transaction path."
+    )
+
+    return {
+        "risk_score": score,
+        "risk_level": level,
+        "risk_indicators": indicators,
+        "risk_assessment": assessment,
+    }
+
+
+def format_amount(
+    amount: Any,
+) -> Optional[str]:
+    if amount is None:
+        return None
+
+    try:
+        return f"{float(amount):,.3f}".rstrip(
+            "0"
+        ).rstrip(".")
+    except (
+        ValueError,
+        TypeError,
+    ):
+        return str(amount)
+
+
+# ============================================================
+# PDF REPORT
+# ============================================================
+
+def generate_report(
+    result: Dict[str, Any],
+) -> Path:
+    """
+    Generate a structured investigation PDF.
+    """
+
+    styles = getSampleStyleSheet()
+
+    title_style = ParagraphStyle(
+        "ReportTitle",
+        parent=styles["Title"],
+        fontName="Helvetica-Bold",
+        fontSize=18,
+        leading=22,
+        alignment=TA_LEFT,
+        textColor=colors.HexColor(
+            "#163A5F"
+        ),
+        spaceAfter=6 * mm,
+    )
+
+    section_style = ParagraphStyle(
+        "Section",
+        parent=styles["Heading2"],
+        fontName="Helvetica-Bold",
+        fontSize=10,
+        leading=13,
+        textColor=colors.HexColor(
+            "#536577"
+        ),
+        spaceBefore=4 * mm,
+        spaceAfter=2 * mm,
+    )
+
+    body_style = ParagraphStyle(
+        "Body",
+        parent=styles["BodyText"],
+        fontName="Helvetica",
+        fontSize=9,
+        leading=13,
+        textColor=colors.HexColor(
+            "#354656"
+        ),
+    )
+
+    small_style = ParagraphStyle(
+        "Small",
+        parent=body_style,
+        fontSize=7.5,
+        leading=10,
+        textColor=colors.HexColor(
+            "#6C7B89"
+        ),
+    )
+
+    document = SimpleDocTemplate(
+        str(REPORT_FILE),
+        pagesize=A4,
+        rightMargin=15 * mm,
+        leftMargin=15 * mm,
+        topMargin=15 * mm,
+        bottomMargin=15 * mm,
+        title="BlockTrace Investigation Report",
+        author="BlockTrace",
+    )
+
+    story = []
+
+    # --------------------------------------------------------
+    # TITLE
+    # --------------------------------------------------------
+
+    story.append(
+        Paragraph(
+            "BLOCKTRACE",
+            title_style,
+        )
+    )
+
+    story.append(
+        Paragraph(
+            "Cryptocurrency Forensic Trace Report",
+            section_style,
+        )
+    )
+
+    story.append(
+        Spacer(
+            1,
+            2 * mm,
+        )
+    )
+
+    story.append(
+        Paragraph(
+            "Automated blockchain transaction analysis "
+            "for investigative triage.",
+            body_style,
+        )
+    )
+
+    story.append(
+        Spacer(
+            1,
+            5 * mm,
+        )
+    )
+
+    # --------------------------------------------------------
+    # CORE RESULT
+    # --------------------------------------------------------
+
+    story.append(
+        Paragraph(
+            "INVESTIGATION RESULT",
+            section_style,
+        )
+    )
+
+    result_type = result.get(
+        "result",
+        "inconclusive",
+    )
+
+    result_heading = {
+        "exchange_identified": "Exchange Identified",
+        "mixer_identified": "Trace Halted — Mixer Detected",
+        "sanctioned": "Sanctioned Entity Identified",
+        "high_risk_entity": "High-Risk Entity Identified",
+        "identified": "Entity Identified",
+        "inconclusive": "Trace Inconclusive",
+    }.get(
+        result_type,
+        "Trace Inconclusive",
+    )
+
+    story.append(
+        Paragraph(
+            f"<b>{result_heading}</b>",
+            body_style,
+        )
+    )
+
+    if result.get(
+        "exchange_name"
+    ):
+        story.append(
+            Paragraph(
+                (
+                    "Known destination: "
+                    f"<b>{result['exchange_name']}</b>"
+                ),
+                body_style,
+            )
+        )
+
+    # --------------------------------------------------------
+    # WALLET
+    # --------------------------------------------------------
+
+    story.append(
+        Paragraph(
+            "WALLET UNDER INVESTIGATION",
+            section_style,
+        )
+    )
+
+    wallet_data = [
+        [
+            "Wallet Address",
+            result.get(
+                "wallet_address",
+                "—",
+            ),
+        ],
+        [
+            "Result",
+            result.get(
+                "result",
+                "—",
+            ),
+        ],
+        [
+            "Confidence",
+            f"{result.get('confidence', 0)}%",
+        ],
+        [
+            "Hops",
+            str(
+                result.get(
+                    "hops",
+                    0,
+                )
+            ),
+        ],
+        [
+            "Network",
+            "TRON",
+        ],
+    ]
+
+    wallet_table = Table(
+        wallet_data,
+        colWidths=[
+            42 * mm,
+            125 * mm,
+        ],
+    )
+
+    wallet_table.setStyle(
+        TableStyle(
+            [
+                (
+                    "BACKGROUND",
+                    (0, 0),
+                    (0, -1),
+                    colors.HexColor(
+                        "#F1F4F7"
+                    ),
+                ),
+                (
+                    "TEXTCOLOR",
+                    (0, 0),
+                    (-1, -1),
+                    colors.HexColor(
+                        "#354656"
+                    ),
+                ),
+                (
+                    "FONTNAME",
+                    (0, 0),
+                    (0, -1),
+                    "Helvetica-Bold",
+                ),
+                (
+                    "FONTNAME",
+                    (1, 0),
+                    (1, -1),
+                    "Helvetica",
+                ),
+                (
+                    "FONTSIZE",
+                    (0, 0),
+                    (-1, -1),
+                    8,
+                ),
+                (
+                    "GRID",
+                    (0, 0),
+                    (-1, -1),
+                    0.4,
+                    colors.HexColor(
+                        "#D8E0E7"
+                    ),
+                ),
+                (
+                    "VALIGN",
+                    (0, 0),
+                    (-1, -1),
+                    "TOP",
+                ),
+                (
+                    "LEFTPADDING",
+                    (0, 0),
+                    (-1, -1),
+                    6,
+                ),
+                (
+                    "RIGHTPADDING",
+                    (0, 0),
+                    (-1, -1),
+                    6,
+                ),
+                (
+                    "TOPPADDING",
+                    (0, 0),
+                    (-1, -1),
+                    6,
+                ),
+                (
+                    "BOTTOMPADDING",
+                    (0, 0),
+                    (-1, -1),
+                    6,
+                ),
+            ]
+        )
+    )
+
+    story.append(
+        wallet_table
+    )
+
+    # --------------------------------------------------------
+    # FUND FLOW
+    # --------------------------------------------------------
+
+    story.append(
+        Paragraph(
+            "TRACE PATH",
+            section_style,
+        )
+    )
+
+    path = result.get(
+        "hop_path",
+        [],
+    )
+
+    path_data = []
+
+    for index, address in enumerate(
+        path
+    ):
+        if index == 0:
+            label = "SOURCE"
+        elif index == len(path) - 1:
+            label = "DESTINATION"
+        else:
+            label = f"HOP {index}"
+
+        path_data.append(
+            [
+                label,
+                address,
+            ]
+        )
+
+    if not path_data:
+        path_data.append(
+            [
+                "PATH",
+                "No trace path available",
+            ]
+        )
+
+    path_table = Table(
+        path_data,
+        colWidths=[
+            35 * mm,
+            132 * mm,
+        ],
+    )
+
+    path_table.setStyle(
+        TableStyle(
+            [
+                (
+                    "BACKGROUND",
+                    (0, 0),
+                    (0, -1),
+                    colors.HexColor(
+                        "#F7F9FB"
+                    ),
+                ),
+                (
+                    "FONTNAME",
+                    (0, 0),
+                    (0, -1),
+                    "Helvetica-Bold",
+                ),
+                (
+                    "FONTNAME",
+                    (1, 0),
+                    (1, -1),
+                    "Courier",
+                ),
+                (
+                    "FONTSIZE",
+                    (0, 0),
+                    (-1, -1),
+                    7.5,
+                ),
+                (
+                    "GRID",
+                    (0, 0),
+                    (-1, -1),
+                    0.4,
+                    colors.HexColor(
+                        "#D8E0E7"
+                    ),
+                ),
+                (
+                    "VALIGN",
+                    (0, 0),
+                    (-1, -1),
+                    "TOP",
+                ),
+                (
+                    "LEFTPADDING",
+                    (0, 0),
+                    (-1, -1),
+                    5,
+                ),
+                (
+                    "RIGHTPADDING",
+                    (0, 0),
+                    (-1, -1),
+                    5,
+                ),
+                (
+                    "TOPPADDING",
+                    (0, 0),
+                    (-1, -1),
+                    5,
+                ),
+                (
+                    "BOTTOMPADDING",
+                    (0, 0),
+                    (-1, -1),
+                    5,
+                ),
+            ]
+        )
+    )
+
+    story.append(
+        path_table
+    )
+
+    # --------------------------------------------------------
+    # TRANSACTION EVIDENCE
+    # --------------------------------------------------------
+
+    story.append(
+        Paragraph(
+            "TRANSACTION EVIDENCE",
+            section_style,
+        )
+    )
+
+    transaction_data = [
+        [
+            "Asset",
+            result.get(
+                "token",
+                "—",
+            ) or "—",
+        ],
+        [
+            "Amount",
+            format_amount(
+                result.get(
+                    "amount"
+                )
+            ) or "—",
+        ],
+        [
+            "Source",
+            result.get(
+                "from_address"
+            )
+            or result.get(
+                "wallet_address"
+            )
+            or "—",
+        ],
+        [
+            "Destination",
+            result.get(
+                "to_address"
+            )
+            or "—",
+        ],
+        [
+            "Contract",
+            result.get(
+                "contract_address"
+            )
+            or "—",
+        ],
+        [
+            "Transaction Hash",
+            result.get(
+                "transaction_hash"
+            )
+            or result.get(
+                "transaction_id"
+            )
+            or "—",
+        ],
+        [
+            "Block Number",
+            str(
+                result.get(
+                    "block_number"
+                )
+                or "—"
+            ),
+        ],
+    ]
+
+    transaction_table = Table(
+        transaction_data,
+        colWidths=[
+            42 * mm,
+            125 * mm,
+        ],
+    )
+
+    transaction_table.setStyle(
+        TableStyle(
+            [
+                (
+                    "BACKGROUND",
+                    (0, 0),
+                    (0, -1),
+                    colors.HexColor(
+                        "#F1F4F7"
+                    ),
+                ),
+                (
+                    "FONTNAME",
+                    (0, 0),
+                    (0, -1),
+                    "Helvetica-Bold",
+                ),
+                (
+                    "FONTNAME",
+                    (1, 0),
+                    (1, -1),
+                    "Courier",
+                ),
+                (
+                    "FONTSIZE",
+                    (0, 0),
+                    (-1, -1),
+                    7.5,
+                ),
+                (
+                    "GRID",
+                    (0, 0),
+                    (-1, -1),
+                    0.4,
+                    colors.HexColor(
+                        "#D8E0E7"
+                    ),
+                ),
+                (
+                    "VALIGN",
+                    (0, 0),
+                    (-1, -1),
+                    "TOP",
+                ),
+                (
+                    "WORDWRAP",
+                    (0, 0),
+                    (-1, -1),
+                    True,
+                ),
+                (
+                    "LEFTPADDING",
+                    (0, 0),
+                    (-1, -1),
+                    5,
+                ),
+                (
+                    "RIGHTPADDING",
+                    (0, 0),
+                    (-1, -1),
+                    5,
+                ),
+                (
+                    "TOPPADDING",
+                    (0, 0),
+                    (-1, -1),
+                    5,
+                ),
+                (
+                    "BOTTOMPADDING",
+                    (0, 0),
+                    (-1, -1),
+                    5,
+                ),
+            ]
+        )
+    )
+
+    story.append(
+        transaction_table
+    )
+
+    # --------------------------------------------------------
+    # ANALYTICAL SIGNALS
+    # --------------------------------------------------------
+
+    story.append(
+        Paragraph(
+            "ANALYTICAL SIGNALS",
+            section_style,
+        )
+    )
+
+    risk_data = [
+        [
+            "Risk Score",
+            f"{result.get('risk_score', 0)} / 100",
+        ],
+        [
+            "Risk Level",
+            result.get(
+                "risk_level",
+                "LOW",
+            ),
+        ],
+        [
+            "Fan-in",
+            "Detected"
+            if result.get(
+                "fan_in",
+                False,
+            )
+            else "Not detected",
+        ],
+        [
+            "Fan-out",
+            "Detected"
+            if result.get(
+                "fan_out",
+                False,
+            )
+            else "Not detected",
+        ],
+        [
+            "Rapid Hops",
+            "Detected"
+            if result.get(
+                "rapid_hops",
+                False,
+            )
+            else "Not detected",
+        ],
+    ]
+
+    risk_table = Table(
+        risk_data,
+        colWidths=[
+            42 * mm,
+            125 * mm,
+        ],
+    )
+
+    risk_table.setStyle(
+        TableStyle(
+            [
+                (
+                    "BACKGROUND",
+                    (0, 0),
+                    (0, -1),
+                    colors.HexColor(
+                        "#F7F9FB"
+                    ),
+                ),
+                (
+                    "FONTNAME",
+                    (0, 0),
+                    (0, -1),
+                    "Helvetica-Bold",
+                ),
+                (
+                    "FONTSIZE",
+                    (0, 0),
+                    (-1, -1),
+                    8,
+                ),
+                (
+                    "GRID",
+                    (0, 0),
+                    (-1, -1),
+                    0.4,
+                    colors.HexColor(
+                        "#D8E0E7"
+                    ),
+                ),
+                (
+                    "VALIGN",
+                    (0, 0),
+                    (-1, -1),
+                    "TOP",
+                ),
+            ]
+        )
+    )
+
+    story.append(
+        risk_table
+    )
+
+    indicators = result.get(
+        "risk_indicators",
+        [],
+    )
+
+    if indicators:
+        story.append(
+            Spacer(
+                1,
+                2 * mm,
+            )
+        )
+
+        story.append(
+            Paragraph(
+                "<b>Indicators</b>",
+                body_style,
+            )
+        )
+
+        for indicator in indicators:
+            story.append(
+                Paragraph(
+                    f"• {indicator}",
+                    body_style,
+                )
+            )
+
+    # --------------------------------------------------------
+    # ASSESSMENT
+    # --------------------------------------------------------
+
+    assessment = result.get(
+        "risk_assessment"
+    )
+
+    if assessment:
+        story.append(
+            Paragraph(
+                "AUTOMATED ASSESSMENT",
+                section_style,
+            )
+        )
+
+        story.append(
+            Paragraph(
+                assessment,
+                body_style,
+            )
+        )
+
+    # --------------------------------------------------------
+    # DISCLAIMER
+    # --------------------------------------------------------
+
+    story.append(
+        Spacer(
+            1,
+            7 * mm,
+        )
+    )
+
+    story.append(
+        Paragraph(
+            (
+                "<b>Forensic limitation:</b> Automated blockchain "
+                "analysis is an investigative aid. Entity "
+                "identification, confidence and risk indicators "
+                "do not independently establish criminal "
+                "activity, intent, identity or guilt."
+            ),
+            small_style,
+        )
+    )
+
+    document.build(
+        story
+    )
+
+    return REPORT_FILE
+
+
+# ============================================================
+# HEALTH CHECK
+# ============================================================
+
+@app.get("/")
+def root():
+    return {
+        "service": "BlockTrace Investigation API",
+        "status": "online",
+        "network": "TRON",
+        "docs": "/docs",
+    }
+
+
+@app.get("/health")
+def health():
+    return {
+        "status": "healthy",
+        "network": "TRON",
+    }
 
 
 # ============================================================
@@ -54,373 +1224,208 @@ class TraceRequest(BaseModel):
 # ============================================================
 
 @app.post("/trace")
-async def trace(request: TraceRequest):
+def trace(
+    request: TraceRequest,
+):
+    address = request.address.strip()
 
-    wallet_address = request.address.strip()
-
-    # --------------------------------------------------------
-    # RUN BLOCKCHAIN TRACE
-    # --------------------------------------------------------
-
-    trace_result = trace_wallet(
-        wallet_address
-    )
-
-    # --------------------------------------------------------
-    # BEHAVIORAL FLAGS
-    # --------------------------------------------------------
-
-    rapid_hops = trace_result.get(
-        "rapid_hops",
-        False
-    )
-
-    fan_out = trace_result.get(
-        "fan_out",
-        False
-    )
-
-    fan_in = trace_result.get(
-        "fan_in",
-        False
-    )
-
-    high_risk_entity = trace_result.get(
-        "high_risk_entity",
-        False
-    )
-
-    # --------------------------------------------------------
-    # DETERMINE VERDICT
-    # --------------------------------------------------------
-
-    if trace_result.get("matched"):
-
-        tag = trace_result.get(
-            "tag",
-            {}
+    if not is_valid_tron_address(
+        address
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid TRON wallet address.",
         )
 
-        tag_type = tag.get(
-            "type"
+    try:
+        trace_result = trace_wallet(
+            address,
+            depth=0,
+            max_depth=5,
         )
 
-        tag_name = tag.get(
-            "name"
+    except Exception as exc:
+        print(
+            "TRACE ERROR:",
+            repr(exc),
         )
 
-        if tag_type == "exchange":
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Blockchain tracing failed."
+            ),
+        ) from exc
 
-            result = "exchange_identified"
-
-            exchange_name = tag_name
-
-            confidence = tag.get(
-                "confidence",
-                95
-            )
-
-        elif tag_type == "mixer":
-
-            result = "mixer_identified"
-
-            exchange_name = None
-
-            confidence = tag.get(
-                "confidence",
-                95
-            )
-
-        elif tag_type == "sanctioned":
-
-            result = "sanctioned"
-
-            exchange_name = None
-
-            confidence = tag.get(
-                "confidence",
-                98
-            )
-
-        elif tag_type == "sanctioned_delisted":
-
-            result = "sanctioned_delisted"
-
-            exchange_name = None
-
-            confidence = tag.get(
-                "confidence",
-                95
-            )
-
-        elif tag_type == "high_risk":
-
-            result = "high_risk_entity"
-
-            exchange_name = None
-
-            confidence = tag.get(
-                "confidence",
-                90
-            )
-
-        else:
-
-            result = "identified"
-
-            exchange_name = None
-
-            confidence = tag.get(
-                "confidence",
-                90
-            )
-
-        hop_path = trace_result.get(
-            "path",
-            []
+    if not isinstance(
+        trace_result,
+        dict,
+    ):
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Tracer returned an invalid response."
+            ),
         )
 
-    else:
+    # ========================================================
+    # RESULT CLASSIFICATION
+    # ========================================================
 
-        result = "inconclusive"
-
-        exchange_name = None
-
-        confidence = 0
-
-        hop_path = [
-            wallet_address
-        ]
-
-    # --------------------------------------------------------
-    # TRANSACTION DATA
-    # --------------------------------------------------------
-
-    token = trace_result.get(
-        "token"
+    result_type = determine_result_type(
+        trace_result
     )
 
-    amount = trace_result.get(
-        "amount"
+    confidence = determine_confidence(
+        trace_result
     )
 
-    raw_amount = trace_result.get(
-        "raw_amount"
-    )
+    # ========================================================
+    # BASE RESPONSE
+    # ========================================================
 
-    decimals = trace_result.get(
-        "decimals"
-    )
-
-    contract_address = trace_result.get(
-        "contract_address"
-    )
-
-    from_address = trace_result.get(
-        "from_address"
-    )
-
-    to_address = trace_result.get(
-        "to_address"
-    )
-
-    risk_transaction = trace_result.get(
-        "risk_transaction",
-        False
-    )
-
-    # --------------------------------------------------------
-    # FORENSIC TRANSACTION EVIDENCE
-    # --------------------------------------------------------
-
-    transaction_hash = trace_result.get(
-        "transaction_hash"
-    )
-
-    transaction_id = trace_result.get(
-        "transaction_id"
-    )
-
-    block_number = trace_result.get(
-        "block_number"
-    )
-
-    transaction_timestamp = trace_result.get(
-        "transaction_timestamp"
-    )
-
-    # --------------------------------------------------------
-    # HOP COUNT
-    # --------------------------------------------------------
-
-    calculated_hops = trace_result.get(
-        "hops"
-    )
-
-    if calculated_hops is None:
-
-        calculated_hops = max(
-            0,
-            len(hop_path) - 1
-        )
-
-    # --------------------------------------------------------
-    # RISK ENGINE
-    # --------------------------------------------------------
-
-    risk_data = calculate_risk({
-
-        "result": result,
-
-        "hops": calculated_hops,
-
-        "risk_transaction": (
-            risk_transaction
-        ),
-
-        "amount": amount,
-
-        "token": token,
-
-        "rapid_hops": rapid_hops,
-
-        "fan_out": fan_out,
-
-        "fan_in": fan_in,
-
-        "high_risk_entity": (
-            high_risk_entity
-        )
-    })
-
-    # --------------------------------------------------------
-    # FINAL VERDICT OBJECT
-    # --------------------------------------------------------
-
-    verdict = {
-
-        "wallet_address": wallet_address,
-
-        "result": result,
-
-        "exchange_name": exchange_name,
-
+    response: Dict[str, Any] = {
+        "wallet_address": address,
+        "result": result_type,
+        "exchange_name": None,
         "confidence": confidence,
-
-        "hop_path": hop_path,
-
-        "hops": calculated_hops,
-
-        # -------------------------------
-        # ASSET INFORMATION
-        # -------------------------------
-
-        "token": token,
-
-        "amount": amount,
-
-        "raw_amount": raw_amount,
-
-        "decimals": decimals,
-
-        "contract_address": (
-            contract_address
+        "hop_path": trace_result.get(
+            "path",
+            [address],
         ),
-
-        # -------------------------------
-        # SOURCE / DESTINATION
-        # -------------------------------
-
-        "from_address": from_address,
-
-        "to_address": to_address,
-
-        # -------------------------------
-        # TRANSACTION EVIDENCE
-        # -------------------------------
-
-        "transaction_hash": (
-            transaction_hash
+        "hops": trace_result.get(
+            "hops",
+            0,
         ),
-
-        "transaction_id": (
-            transaction_id
+        "token": trace_result.get(
+            "token"
         ),
-
-        "block_number": (
-            block_number
+        "amount": trace_result.get(
+            "amount"
         ),
-
-        "transaction_timestamp": (
-            transaction_timestamp
+        "raw_amount": trace_result.get(
+            "raw_amount"
         ),
-
-        # -------------------------------
-        # RISK
-        # -------------------------------
-
-        "risk_transaction": (
-            risk_transaction
+        "decimals": trace_result.get(
+            "decimals"
         ),
-
-        "rapid_hops": rapid_hops,
-
-        "fan_out": fan_out,
-
-        "fan_in": fan_in,
-
-        "high_risk_entity": (
-            high_risk_entity
+        "contract_address": trace_result.get(
+            "contract_address"
         ),
-
-        "risk_score": (
-            risk_data["risk_score"]
+        "from_address": trace_result.get(
+            "from_address"
         ),
-
-        "risk_level": (
-            risk_data["risk_level"]
+        "to_address": trace_result.get(
+            "to_address"
         ),
-
-        "risk_indicators": (
-            risk_data["risk_indicators"]
+        "transaction_hash": trace_result.get(
+            "transaction_hash"
         ),
-
-        "risk_assessment": (
-            risk_data["risk_assessment"]
-        )
+        "transaction_id": trace_result.get(
+            "transaction_id"
+        ),
+        "block_number": trace_result.get(
+            "block_number"
+        ),
+        "transaction_timestamp": trace_result.get(
+            "transaction_timestamp"
+        ),
+        "risk_transaction": trace_result.get(
+            "risk_transaction",
+            False,
+        ),
+        "rapid_hops": trace_result.get(
+            "rapid_hops",
+            False,
+        ),
+        "fan_out": trace_result.get(
+            "fan_out",
+            False,
+        ),
+        "fan_in": trace_result.get(
+            "fan_in",
+            False,
+        ),
+        "high_risk_entity": trace_result.get(
+            "high_risk_entity",
+            False,
+        ),
+        "trace_reason": None,
+        "trace_detail": None,
     }
 
-    # --------------------------------------------------------
-    # GENERATE PDF
-    # --------------------------------------------------------
+    # ========================================================
+    # ENTITY NAME
+    # ========================================================
 
-    report_path = (
-        reports_dir /
-        "trace_report.pdf"
+    tag = trace_result.get(
+        "tag",
+        {},
     )
 
-    generate_report(
-        verdict,
-        str(report_path)
-    )
+    if isinstance(
+        tag,
+        dict,
+    ):
+        if tag.get("type") == "exchange":
+            response["exchange_name"] = tag.get(
+                "name"
+            )
 
-    # --------------------------------------------------------
-    # API RESPONSE
-    # --------------------------------------------------------
+        elif tag.get("name"):
+            response["exchange_name"] = tag.get(
+                "name"
+            )
 
-    return {
+    # ========================================================
+    # INCONCLUSIVE / ERROR INFORMATION
+    # ========================================================
 
-        **verdict,
-
-        "trace_reason": trace_result.get(
+    if not trace_result.get(
+        "matched",
+        False,
+    ):
+        reason = trace_result.get(
             "reason"
-        ),
-
-        "trace_detail": trace_result.get(
-            "detail"
-        ),
-
-        "report": str(
-            report_path
         )
-    }
+
+        response["trace_reason"] = reason
+
+        response["trace_detail"] = trace_result.get(
+            "detail"
+        )
+
+    # ========================================================
+    # RISK
+    # ========================================================
+
+    risk = calculate_risk(
+        response
+    )
+
+    response.update(
+        risk
+    )
+
+    # ========================================================
+    # REPORT
+    # ========================================================
+
+    try:
+        report_path = generate_report(
+            response
+        )
+
+        response["report"] = (
+            f"reports/{report_path.name}"
+        )
+
+    except Exception as exc:
+        print(
+            "REPORT ERROR:",
+            repr(exc),
+        )
+
+        response["report"] = None
+
+    return response
