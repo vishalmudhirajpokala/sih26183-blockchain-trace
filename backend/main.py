@@ -100,7 +100,7 @@ app.mount(
 class TraceRequest(BaseModel):
     address: str = Field(
         ...,
-        min_length=34,
+        min_length=33,
         max_length=34,
         description="TRON wallet address",
     )
@@ -124,7 +124,7 @@ def is_valid_tron_address(
 
     address = address.strip()
 
-    if len(address) != 34:
+    if len(address) not in {33, 34}:
         return False
 
     return (
