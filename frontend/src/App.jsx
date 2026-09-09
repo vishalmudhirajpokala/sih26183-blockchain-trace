@@ -23,7 +23,9 @@ const DEMO_SCENARIOS = {
   inconclusive: { wallet_address: "TUnknownDestinationDemoAddress009", result: "inconclusive", exchange_name: null, confidence: 0, hop_path: ["TUnknownDestinationDemoAddress009"], hops: 0, token: null, amount: null, from_address: "TUnknownDestinationDemoAddress009", to_address: null, contract_address: null, transaction_hash: null, transaction_id: null, block_number: null, risk_score: 10, risk_level: "LOW", risk_indicators: [], risk_assessment: "No reliable destination could be established from the available transaction data.", report: "reports/trace_report.pdf" },
 };
 
-function isValidTronAddress(value) { return /^T[a-zA-Z0-9]{33}$/.test(value.trim()); }
+function isValidTronAddress(addr) {
+  return /^T[a-zA-Z0-9]{33}$/.test(addr.trim());
+}
 function reportUrlFromPath(path) { if (!path) return null; if (/^https?:\/\//i.test(path)) return path; const filename = String(path).replace(/\\/g, "/").split("/").pop(); return filename ? `${REPORTS_BASE}/${encodeURIComponent(filename)}` : null; }
 function newCaseId() { return `CASE-${Date.now().toString().slice(-6)}`; }
 function shorten(value = "", start = 8, end = 7) { return value.length > start + end + 3 ? `${value.slice(0, start)}…${value.slice(-end)}` : value; }
