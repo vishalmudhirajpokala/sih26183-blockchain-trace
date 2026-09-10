@@ -25,7 +25,9 @@ const DEMO_SCENARIOS = {
 
 function reportUrlFromPath(path) { if (!path) return null; if (/^https?:\/\//i.test(path)) return path; const filename = String(path).replace(/\\/g, "/").split("/").pop(); return filename ? `${REPORTS_BASE}/${encodeURIComponent(filename)}` : null; }
 function newCaseId() { return `CASE-${Date.now().toString().slice(-6)}`; }
-function shorten(value = "", start = 8, end = 7) { return value.length > start + end + 3 ? `${value.slice(0, start)}…${value.slice(-end)}` : value; }
+function shorten(value = "", start = 8, end = 7) { const text = String(value ?? ""); return text.length > start + end + 3 ? `${text.slice(0, start)}…${text.slice(-end)}` : text; }
+function displayValue(value) { if (value === null || value === undefined || value === "") return "—"; return typeof value === "object" ? JSON.stringify(value) : String(value); }
+function normalizeTraceResult(data, fallbackAddress) { const source = data && typeof data === "object" ? data : {}; const rawPath = Array.isArray(source.hop_path) ? source.hop_path : [source.from_address, source.to_address].filter(Boolean); return { ...source, wallet_address: displayValue(source.wallet_address || fallbackAddress), hop_path: rawPath.map(displayValue), risk_indicators: Array.isArray(source.risk_indicators) ? source.risk_indicators.map(displayValue) : [] }; }
 
 function CopyButton({ text }) {
   const [copied, setCopied] = useState(false);
@@ -35,7 +37,7 @@ function Dot({ tone = "green" }) { return <span className={`dot dot-${tone}`} ar
 function Badge({ children, tone = "slate" }) { return <span className={`badge badge-${tone}`}>{children}</span>; }
 function Spinner() { return <span className="spinner" aria-hidden="true" />; }
 function Panel({ eyebrow, title, action, children, className = "" }) { return <section className={`panel ${className}`}><div className="panel-heading"><div><div className="panel-eyebrow">{eyebrow}</div><h2>{title}</h2></div>{action}</div>{children}</section>; }
-function DataRow({ label, value, copy = false, muted = false }) { return <div className="data-row"><span className="data-label">{label}</span><span className={`data-value ${muted ? "muted" : ""}`}>{value || "—"}{copy && value ? <CopyButton text={value} /> : null}</span></div>; }
+function DataRow({ label, value, copy = false, muted = false }) { const rendered = displayValue(value); return <div className="data-row"><span className="data-label">{label}</span><span className={`data-value ${muted ? "muted" : ""}`}>{rendered}{copy && rendered !== "—" ? <CopyButton text={rendered} /> : null}</span></div>; }
 
 function Notice({ result, meta }) {
   const messages = {
@@ -71,7 +73,7 @@ function ResultView({ result, meta, onDownload }) {
 export default function App() {
   const [address, setAddress] = useState(""); const [status, setStatus] = useState("idle"); const [result, setResult] = useState(null); const [errorMsg, setErrorMsg] = useState(""); const [caseId, setCaseId] = useState(null); const [demoMode, setDemoMode] = useState(false); const [demoScenario, setDemoScenario] = useState("exchange"); const [history, setHistory] = useState([]); const [loadingStep, setLoadingStep] = useState(0); const timerRef = useRef(null); const demoTimerRef = useRef(null);
   useEffect(() => () => { clearInterval(timerRef.current); clearInterval(demoTimerRef.current); }, []);
-  function finishWith(data) { const id = newCaseId(); setCaseId(id); setResult({ ...data, case_id: id }); setStatus("done"); setHistory((current) => [{ id, address: data.wallet_address, meta: RESULT_META[data.result] || RESULT_META.identified }, ...current].slice(0, 6)); }
+  function finishWith(data) { const normalized = normalizeTraceResult(data, address.trim()); const id = newCaseId(); setCaseId(id); setResult({ ...normalized, case_id: id }); setStatus("done"); setHistory((current) => [{ id, address: normalized.wallet_address, meta: RESULT_META[normalized.result] || RESULT_META.identified }, ...current].slice(0, 6)); }
   async function handleTrace() { const trimmed = address.trim(); if (demoMode) { setStatus("loading"); setErrorMsg(""); setResult(null); setLoadingStep(0); clearInterval(demoTimerRef.current); demoTimerRef.current = setInterval(() => setLoadingStep((current) => Math.min(current + 1, LOADING_STEPS.length - 1)), 350); window.setTimeout(() => { clearInterval(demoTimerRef.current); finishWith(DEMO_SCENARIOS[demoScenario]); }, 1600); return; } if (!trimmed) { setErrorMsg("Enter a TRON wallet address to begin."); setStatus("error"); return; } setStatus("loading"); setErrorMsg(""); setResult(null); setLoadingStep(0); clearInterval(timerRef.current); timerRef.current = setInterval(() => setLoadingStep((current) => Math.min(current + 1, LOADING_STEPS.length - 1)), 900); try { const response = await axios.post(API_URL, { address: trimmed }, { timeout: 120000 }); clearInterval(timerRef.current); finishWith(response.data); } catch (error) { clearInterval(timerRef.current); setErrorMsg(error.code === "ECONNABORTED" ? "The investigation timed out. Please retry." : error.response?.data?.detail || (error.response ? "The investigation service returned an error." : "Unable to connect to the investigation service.")); setStatus("error"); } }
   function handleNewCase() { setAddress(""); setResult(null); setStatus("idle"); setErrorMsg(""); setCaseId(null); }
   function handleHistorySelect(item) { setAddress(item.address); setResult(null); setStatus("idle"); setErrorMsg(""); setCaseId(item.id); }
