@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import axios from "axios";
 import "./App.css";
 
-const API_BASE_URL = (import.meta.env.VITE_API_URL || "http://127.0.0.1:8000").replace(/\/$/, "");
+const API_BASE_URL = (import.meta.env.VITE_API_URL || "https://sih26183-api.onrender.com").replace(/\/$/, "");
 const API_URL = `${API_BASE_URL}/trace`;
 const REPORTS_BASE = `${API_BASE_URL}/reports`;
 
@@ -27,7 +27,7 @@ function reportUrlFromPath(path) { if (!path) return null; if (/^https?:\/\//i.t
 function newCaseId() { return `CASE-${Date.now().toString().slice(-6)}`; }
 function shorten(value = "", start = 8, end = 7) { const text = String(value ?? ""); return text.length > start + end + 3 ? `${text.slice(0, start)}…${text.slice(-end)}` : text; }
 function displayValue(value) { if (value === null || value === undefined || value === "") return "—"; return typeof value === "object" ? JSON.stringify(value) : String(value); }
-function normalizeTraceResult(data, fallbackAddress) { const source = data && typeof data === "object" ? data : {}; const rawPath = Array.isArray(source.hop_path) ? source.hop_path : [source.from_address, source.to_address].filter(Boolean); return { ...source, wallet_address: displayValue(source.wallet_address || fallbackAddress), hop_path: rawPath.map(displayValue), risk_indicators: Array.isArray(source.risk_indicators) ? source.risk_indicators.map(displayValue) : [] }; }
+function normalizeTraceResult(data, fallbackAddress) { const source = data && typeof data === "object" ? data : {}; const rawPath = Array.isArray(source.hop_path) ? source.hop_path : [source.from_address, source.to_address].filter(Boolean); return { ...source, result: displayValue(source.result), wallet_address: displayValue(source.wallet_address || fallbackAddress), exchange_name: displayValue(source.exchange_name), token: displayValue(source.token), amount: displayValue(source.amount), risk_level: displayValue(source.risk_level), risk_assessment: displayValue(source.risk_assessment), from_address: displayValue(source.from_address), to_address: displayValue(source.to_address), contract_address: displayValue(source.contract_address), transaction_id: displayValue(source.transaction_id), transaction_hash: displayValue(source.transaction_hash), hop_path: rawPath.map(displayValue), risk_indicators: Array.isArray(source.risk_indicators) ? source.risk_indicators.map(displayValue) : [] }; }
 
 function CopyButton({ text }) {
   const [copied, setCopied] = useState(false);
