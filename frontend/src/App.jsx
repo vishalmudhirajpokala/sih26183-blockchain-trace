@@ -17,10 +17,42 @@ const RESULT_META = {
 
 const LOADING_STEPS = ["Querying TRON mainnet", "Resolving transaction hops", "Matching entity intelligence", "Compiling investigation record"];
 const DEMO_SCENARIOS = {
-  exchange: { wallet_address: "TWd4WrZ9wn84f5x1hZhL4DHvk738ns5jwb", result: "exchange_identified", exchange_name: "Binance-Hot 7", confidence: 95, hop_path: ["TWd4WrZ9wn84f5x1hZhL4DHvk738ns5jwb", "TDqSquXBgUCLYvYC4XZgrprLK589dkhSCf"], hops: 1, token: "BTT", amount: "7,529,940,740,670.348", from_address: "TWd4WrZ9wn84f5x1hZhL4DHvk738ns5jwb", to_address: "TDqSquXBgUCLYvYC4XZgrprLK589dkhSCf", contract_address: "TAFjULxiVgT4qWk6UZwjqwZXTSaGaqnVp4", transaction_hash: "1d6775f27c7c18b847e813cd12f6be9d931d6b67669b79ff142d6f153300ba29", transaction_id: "1d6775f27c7c18b847e813cd12f6be9d931d6b67669b79ff142d6f153300ba29", block_number: 85920008, fan_in: true, fan_out: false, rapid_hops: false, high_risk_entity: false, risk_score: 25, risk_level: "MEDIUM", risk_indicators: ["Funds reached a known cryptocurrency exchange", "Funds from multiple wallets were consolidated", "Unusually large token transfer detected"], risk_assessment: "Some risk indicators were detected. Additional transaction analysis is recommended.", report: "reports/trace_report.pdf" },
-  mixer: { wallet_address: "TXaMpLeMixerWalletDemoAddress0001", result: "mixer_identified", exchange_name: null, confidence: 90, hop_path: ["TXaMpLeMixerWalletDemoAddress0001", "TIntermediateHopDemoAddress00002", "TMixerContractDemoAddress000003"], hops: 2, token: "USDT", amount: "18,400.00", from_address: "TXaMpLeMixerWalletDemoAddress0001", to_address: "TMixerContractDemoAddress000003", contract_address: null, transaction_hash: null, transaction_id: null, block_number: null, fan_out: true, fan_in: false, rapid_hops: true, high_risk_entity: false, risk_score: 68, risk_level: "HIGH", risk_indicators: ["Rapid successive transfers observed", "Funds dispersed to multiple wallets"], risk_assessment: "Trace halted at a known mixer contract interaction.", report: "reports/trace_report.pdf" },
-  inconclusive: { wallet_address: "TUnknownDestinationDemoAddress009", result: "inconclusive", exchange_name: null, confidence: 0, hop_path: ["TUnknownDestinationDemoAddress009"], hops: 0, token: null, amount: null, from_address: "TUnknownDestinationDemoAddress009", to_address: null, contract_address: null, transaction_hash: null, transaction_id: null, block_number: null, risk_score: 10, risk_level: "LOW", risk_indicators: [], risk_assessment: "No reliable destination could be established from the available transaction data.", report: "reports/trace_report.pdf" },
+  exchange: { wallet_address: "T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb", result: "exchange_identified", exchange_name: "Binance-Hot 7", confidence: 95, hop_path: ["T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb", "TDqSquXBgUCLYvYC4XZgrprLK589dkhSCf"], hops: 1, token: "BTT", amount: "7,529,940,740,670.348", from_address: "T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb", to_address: "TDqSquXBgUCLYvYC4XZgrprLK589dkhSCf", contract_address: "TAFjULxiVgT4qWk6UZwjqwZXTSaGaqnVp4", transaction_hash: "1d6775f27c7c18b847e813cd12f6be9d931d6b67669b79ff142d6f153300ba29", transaction_id: "1d6775f27c7c18b847e813cd12f6be9d931d6b67669b79ff142d6f153300ba29", block_number: 85920008, fan_in: true, fan_out: false, rapid_hops: false, high_risk_entity: false, risk_score: 25, risk_level: "MEDIUM", risk_indicators: ["Funds reached a known cryptocurrency exchange", "Funds from multiple wallets were consolidated", "Unusually large token transfer detected"], risk_assessment: "Some risk indicators were detected. Additional transaction analysis is recommended.", report: "reports/trace_report.pdf" },
+  mixer: { wallet_address: "T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb", result: "mixer_identified", exchange_name: null, confidence: 90, hop_path: ["T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb", "T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb"], hops: 1, token: "USDT", amount: "18,400.00", from_address: "T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb", to_address: "T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb", contract_address: null, transaction_hash: null, transaction_id: null, block_number: null, fan_out: true, fan_in: false, rapid_hops: true, high_risk_entity: false, risk_score: 68, risk_level: "HIGH", risk_indicators: ["Rapid successive transfers observed", "Funds dispersed to multiple wallets"], risk_assessment: "Trace halted at a known mixer contract interaction.", report: "reports/trace_report.pdf" },
+  inconclusive: { wallet_address: "T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb", result: "inconclusive", exchange_name: null, confidence: 0, hop_path: ["T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb"], hops: 0, token: null, amount: null, from_address: "T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb", to_address: null, contract_address: null, transaction_hash: null, transaction_id: null, block_number: null, risk_score: 10, risk_level: "LOW", risk_indicators: [], risk_assessment: "No reliable destination could be established from the available transaction data.", report: "reports/trace_report.pdf" },
 };
+
+const BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+function decodeBase58(value) {
+  const bytes = [];
+  for (const character of value) {
+    const digit = BASE58_ALPHABET.indexOf(character);
+    if (digit < 0) return null;
+    let carry = digit;
+    for (let index = 0; index < bytes.length; index += 1) {
+      carry += bytes[index] * 58;
+      bytes[index] = carry & 0xff;
+      carry >>= 8;
+    }
+    while (carry > 0) {
+      bytes.push(carry & 0xff);
+      carry >>= 8;
+    }
+  }
+  let leadingZeroes = 0;
+  while (leadingZeroes < value.length && value[leadingZeroes] === "1") leadingZeroes += 1;
+  return Uint8Array.from([...Array(leadingZeroes).fill(0), ...bytes.reverse()]);
+}
+async function isValidTronAddress(value) {
+  if (value.length !== 34 || !value.startsWith("T")) return false;
+  const decoded = decodeBase58(value);
+  if (!decoded || decoded.length !== 25 || decoded[0] !== 0x41) return false;
+  const payload = decoded.slice(0, 21);
+  const checksum = decoded.slice(21);
+  const firstHash = await crypto.subtle.digest("SHA-256", payload);
+  const secondHash = await crypto.subtle.digest("SHA-256", firstHash);
+  return checksum.every((byte, index) => byte === new Uint8Array(secondHash)[index]);
+}
 
 function reportUrlFromPath(path) { if (!path) return null; if (/^https?:\/\//i.test(path)) return path; const filename = String(path).replace(/\\/g, "/").split("/").pop(); return filename ? `${REPORTS_BASE}/${encodeURIComponent(filename)}` : null; }
 function newCaseId() { return `CASE-${Date.now().toString().slice(-6)}`; }
@@ -84,7 +116,7 @@ export default function App() {
   const [address, setAddress] = useState(""); const [status, setStatus] = useState("idle"); const [result, setResult] = useState(null); const [errorMsg, setErrorMsg] = useState(""); const [caseId, setCaseId] = useState(null); const [demoMode, setDemoMode] = useState(false); const [demoScenario, setDemoScenario] = useState("exchange"); const [history, setHistory] = useState([]); const [loadingStep, setLoadingStep] = useState(0); const timerRef = useRef(null); const demoTimerRef = useRef(null);
   useEffect(() => () => { clearInterval(timerRef.current); clearInterval(demoTimerRef.current); }, []);
   function finishWith(data) { const normalized = normalizeTraceResult(data, address.trim()); const id = newCaseId(); setCaseId(id); setResult({ ...normalized, case_id: id }); setStatus("done"); setHistory((current) => [{ id, address: normalized.wallet_address, meta: RESULT_META[normalized.result] || RESULT_META.identified }, ...current].slice(0, 6)); }
-  async function handleTrace() { const trimmed = address.trim(); if (demoMode) { setStatus("loading"); setErrorMsg(""); setResult(null); setLoadingStep(0); clearInterval(demoTimerRef.current); demoTimerRef.current = setInterval(() => setLoadingStep((current) => Math.min(current + 1, LOADING_STEPS.length - 1)), 350); window.setTimeout(() => { clearInterval(demoTimerRef.current); finishWith(DEMO_SCENARIOS[demoScenario]); }, 1600); return; } if (!trimmed) { setErrorMsg("Enter a TRON wallet address to begin."); setStatus("error"); return; } setStatus("loading"); setErrorMsg(""); setResult(null); setLoadingStep(0); clearInterval(timerRef.current); timerRef.current = setInterval(() => setLoadingStep((current) => Math.min(current + 1, LOADING_STEPS.length - 1)), 900); try { const response = await axios.post(`${API_BASE_URL}/trace`, { address: trimmed }, { timeout: 120000 }); clearInterval(timerRef.current); finishWith(response.data); } catch (error) { clearInterval(timerRef.current); setErrorMsg(formatApiError(error)); setStatus("error"); } }
+  async function handleTrace() { const trimmed = address.trim(); if (demoMode) { setStatus("loading"); setErrorMsg(""); setResult(null); setLoadingStep(0); clearInterval(demoTimerRef.current); demoTimerRef.current = setInterval(() => setLoadingStep((current) => Math.min(current + 1, LOADING_STEPS.length - 1)), 350); window.setTimeout(() => { clearInterval(demoTimerRef.current); finishWith(DEMO_SCENARIOS[demoScenario]); }, 1600); return; } if (!trimmed) { setErrorMsg("Enter a TRON wallet address to begin."); setStatus("error"); return; } if (!(await isValidTronAddress(trimmed))) { setErrorMsg("Enter a valid 34-character TRON Base58Check address starting with T."); setStatus("error"); return; } setStatus("loading"); setErrorMsg(""); setResult(null); setLoadingStep(0); clearInterval(timerRef.current); timerRef.current = setInterval(() => setLoadingStep((current) => Math.min(current + 1, LOADING_STEPS.length - 1)), 900); try { const response = await axios.post(`${API_BASE_URL}/trace`, { address: trimmed }, { timeout: 120000 }); clearInterval(timerRef.current); finishWith(response.data); } catch (error) { clearInterval(timerRef.current); setErrorMsg(formatApiError(error)); setStatus("error"); } }
   function handleNewCase() { setAddress(""); setResult(null); setStatus("idle"); setErrorMsg(""); setCaseId(null); }
   function handleHistorySelect(item) { setAddress(item.address); setResult(null); setStatus("idle"); setErrorMsg(""); setCaseId(item.id); }
   const meta = result ? RESULT_META[result.result] || RESULT_META.identified : null; const hasResult = status === "done" && Boolean(result);
