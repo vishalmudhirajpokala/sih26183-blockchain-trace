@@ -4,7 +4,32 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>frontend</title>
+    <title>BlockTrace</title>
+    <script>
+      /*
+       * Apply the stored theme before the first paint.
+       *
+       * The `.dark` class drives every `dark:` utility in the Dashboard 01
+       * components, and React only mounts after the stylesheet has already
+       * rendered. Without this, an operator whose theme is dark gets a full
+       * white flash on every page load before `ThemeToggle` corrects it.
+       *
+       * This runs first on purpose: a stored choice wins, and with no stored
+       * choice the operating system decides. `components/theme-toggle.jsx`
+       * reads the same key and takes over from here.
+       */
+      (function () {
+        try {
+          var stored = window.localStorage.getItem("blocktrace.theme");
+          var dark = stored
+            ? stored === "dark"
+            : window.matchMedia("(prefers-color-scheme: dark)").matches;
+          document.documentElement.classList.toggle("dark", dark);
+        } catch (e) {
+          /* storage unavailable: the light theme is the safe default */
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

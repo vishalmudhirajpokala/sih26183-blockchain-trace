@@ -15,6 +15,7 @@ import { ChevronRightIcon } from "lucide-react";
 
 import { Separator } from "@/components/ui/separator";
 import { SidebarTrigger } from "@/components/ui/sidebar";
+import { ThemeToggle } from "@/components/theme-toggle";
 import { ROUTE_TITLES } from "@/routes";
 
 /**
@@ -101,6 +102,8 @@ export function SiteHeader() {
             <span className="truncate text-sm font-medium">{title}</span>
           ) : null}
         </nav>
+
+        <ThemeToggle />
       </div>
     </header>
   );
