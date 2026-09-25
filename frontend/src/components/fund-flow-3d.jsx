@@ -1,4 +1,4 @@
-import { useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { Canvas, useFrame } from "@react-three/fiber";
 import {
@@ -6,6 +6,8 @@ import {
   CameraControlsImpl,
   Html,
 } from "@react-three/drei";
+import { Maximize2, RotateCcw } from "lucide-react";
+import { Button } from "@/components/ui/button";
 
 /* =========================================================
    NODE COLORS
@@ -370,7 +372,7 @@ function layoutGraph(nodes, seed) {
   return { positions, subject, subjectDepth };
 }
 
-function FundFlowScene({ nodes, edges, seed }) {
+function FundFlowScene({ nodes, edges, seed, controlsRef, registerFit }) {
   const { positions, subjectDepth } = useMemo(
     () => layoutGraph(nodes, seed),
     [nodes, seed],
@@ -381,6 +383,7 @@ function FundFlowScene({ nodes, edges, seed }) {
   // it is counted and reported rather than silently dropped.
   const { drawn, undrawn } = useMemo(() => {
     const connections = [];
+    const seen = new Map();
     let missing = 0;
     for (const edge of edges) {
       const from = positions.get(String(edge?.from_address ?? ""));
@@ -389,14 +392,74 @@ function FundFlowScene({ nodes, edges, seed }) {
         missing += 1;
         continue;
       }
+      /*
+       * A stable, collision-free key from real transaction identity.
+       *
+       * The previous key was `hash-from-to`, which is not unique: a provider
+       * can report the same transfer more than once, and two edges sharing a
+       * hash between the same pair produced the same string. React then
+       * duplicated or dropped the connections and logged a key warning.
+       *
+       * The occurrence counter is derived from the data as it is walked, so it
+       * is deterministic for a given edge list -- it is not an array index that
+       * changes when the list is filtered or reordered, and not a random or
+       * render-time value. The identity of the connection is still the real
+       * transaction hash plus its two real endpoints.
+       */
+      const identity = `${edge?.transaction_hash ?? "edge"}-${edge?.from_address}-${edge?.to_address}`;
+      const occurrence = seen.get(identity) ?? 0;
+      seen.set(identity, occurrence + 1);
       connections.push({
-        key: `${edge?.transaction_hash ?? "edge"}-${edge?.from_address}-${edge?.to_address}`,
+        key: occurrence === 0 ? identity : `${identity}#${occurrence}`,
         from,
         to,
       });
     }
     return { drawn: connections, undrawn: missing };
   }, [edges, positions]);
+
+  /*
+   * Fit and Reset.
+   *
+   * These are pure camera moves. They recompute a look-at from the positions the
+   * scene was just laid out with and hand it to the same CameraControls the user
+   * already drives with the mouse, so the buttons and the gestures cannot drift
+   * apart. No request is made and no state is fetched: the camera is the only
+   * thing that changes.
+   */
+  useEffect(() => {
+    if (typeof registerFit !== "function") return;
+    registerFit({
+      fit: () => {
+        const controls = controlsRef?.current;
+        if (!controls || positions.size === 0) return;
+        const box = new THREE.Box3();
+        for (const p of positions.values()) box.expandByPoint(new THREE.Vector3(...p));
+        if (box.isEmpty()) return;
+        const centre = box.getCenter(new THREE.Vector3());
+        const size = box.getSize(new THREE.Vector3()).length();
+        const fov = (controls.object?.fov ?? 48) * (Math.PI / 180);
+        // A little headroom, clamped so a two-node graph is not shoved to the
+        // orbit limits.
+        const distance = Math.min(
+          Math.max((size / 2 / Math.tan(fov / 2)) * 1.35, 6),
+          44,
+        );
+        controls.setLookAt(
+          centre.x,
+          centre.y + distance * 0.25,
+          centre.z + distance,
+          centre.x,
+          centre.y,
+          centre.z,
+          true,
+        );
+      },
+      reset: () => {
+        controlsRef?.current?.reset?.(true);
+      },
+    });
+  }, [positions, controlsRef, registerFit]);
 
   const sceneNodes = useMemo(
     () =>
@@ -501,6 +564,7 @@ function FundFlowScene({ nodes, edges, seed }) {
 
       {/* Camera controls */}
       <CameraControls
+        ref={controlsRef}
         makeDefault
 
         mouseButtons={{
@@ -569,6 +633,16 @@ export default function FundFlow3D({
     [edges],
   );
 
+  /*
+   * The camera controls live inside the canvas, but the buttons that drive them
+   * sit in the header outside it. A ref to the controls plus a `fit` callback
+   * the scene registers is the smallest bridge between the two: no duplicated
+   * camera state, and the buttons call the same object the gestures do.
+   */
+  const controlsRef = useRef(null);
+  const [camera, setCamera] = useState({ fit: null, reset: null });
+  const registerFit = useCallback((api) => setCamera(api), []);
+
   if (nodeList.length === 0) {
     return null;
   }
@@ -613,8 +687,42 @@ export default function FundFlow3D({
         </div>
       </div>
 
-      {/* Scene */}
-      <div className="h-[500px] w-full">
+      {/*
+        Camera Fit / Reset, in the same place the 2D view puts its own so the two
+        tabs read as one tool. These only move the camera — no request, no
+        re-render of the graph — so they are safe to press mid-investigation.
+      */}
+      <div className="flex items-center justify-end gap-1.5 border-b border-slate-800 bg-[#071421] px-3 py-2">
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => camera.fit?.()}
+          disabled={!camera.fit}
+          title="Frames the whole graph in the current canvas"
+        >
+          <Maximize2 className="size-3.5" data-icon="inline-start" />
+          Fit
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => camera.reset?.()}
+          disabled={!camera.reset}
+          title="Returns the camera to the position the view started from"
+        >
+          <RotateCcw className="size-3.5" data-icon="inline-start" />
+          Reset
+        </Button>
+      </div>
+
+      {/*
+        A real workspace rather than a fixed 500px strip. `h-[clamp(...)]` gives
+        a short graph on a small laptop and a tall one on a large display, and
+        `min-h-[420px]` keeps it usable on a phone. The previous fixed height sat
+        inside a ~300px column, which is why the camera felt dead: there was
+        nowhere to orbit to.
+      */}
+      <div className="h-[clamp(420px,62vh,860px)] w-full min-w-0">
         <Canvas
           dpr={[1, 1.75]}
           camera={{
@@ -633,6 +741,8 @@ export default function FundFlow3D({
             edges={edgeList}
             chain={chain}
             seed={seed}
+            controlsRef={controlsRef}
+            registerFit={registerFit}
           />
         </Canvas>
       </div>

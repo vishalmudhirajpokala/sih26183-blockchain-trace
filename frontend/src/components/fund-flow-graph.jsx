@@ -20,8 +20,8 @@
  * the starting point, not because it was judged.
  */
 
-import { Suspense, lazy, useMemo, useState } from "react";
-import { Box, NetworkIcon } from "lucide-react";
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
+import { Box, Minus, NetworkIcon, Plus } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -161,31 +161,229 @@ function edgeMidpoint(from, to) {
 const VIEW_W = 960;
 const VIEW_H = 520;
 
+/** The centre of the viewport in client coordinates, for the +/- buttons. */
+function pointerCentre(svg) {
+  if (!svg) return [0, 0];
+  const r = svg.getBoundingClientRect();
+  return [r.left + r.width / 2, r.top + r.height / 2];
+}
+
+/** A pointer position converted to world (untransformed) coordinates. */
+function toWorld(event, svg, cam) {
+  if (!svg) return { x: 0, y: 0 };
+  const r = svg.getBoundingClientRect();
+  const vx = ((event.clientX - r.left) / r.width) * VIEW_W;
+  const vy = ((event.clientY - r.top) / r.height) * VIEW_H;
+  return { x: (vx - cam.x) / cam.k, y: (vy - cam.y) / cam.k };
+}
+
+/** The bounding box of every laid-out node, used by Fit. */
+function graphBounds(positions) {
+  if (positions.size === 0) return null;
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const p of positions.values()) {
+    minX = Math.min(minX, p.x);
+    minY = Math.min(minY, p.y);
+    maxX = Math.max(maxX, p.x);
+    maxY = Math.max(maxY, p.y);
+  }
+  return { x: minX, y: minY, width: Math.max(maxX - minX, 1), height: Math.max(maxY - minY, 1) };
+}
+
 function Graph2D({ nodes, edges, onSelect }) {
-  const { positions } = useLayout(nodes, VIEW_W, VIEW_H);
+  const laidOut = useLayout(nodes, VIEW_W, VIEW_H);
+
+  // Node positions are state, not a pure memo, so a node can be dragged and
+  // stay where it was put. The initial value is the computed layout; dragging
+  // only ever writes user-driven coordinates on top of it.
+  const [dragged, setDragged] = useState({});
+  const positions = useMemo(() => {
+    const merged = new Map(laidOut.positions);
+    for (const [address, at] of Object.entries(dragged)) merged.set(address, at);
+    return merged;
+  }, [laidOut.positions, dragged]);
+
   const [hover, setHover] = useState(null);
+
+  /*
+   * The camera. A plain transform on one `<g>`, so the world stays larger than
+   * the viewport and the user moves around it -- wheel zooms about the pointer,
+   * dragging the background pans, dragging a node moves only that node.
+   */
+  const svgRef = useRef(null);
+  const [cam, setCam] = useState({ k: 1, x: 0, y: 0 });
+  const gesture = useRef(null);
+
+  const zoomAbout = (clientX, clientY, factor) => {
+    const el = svgRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    // Where the pointer is in viewBox units, before the transform.
+    const px = ((clientX - rect.left) / rect.width) * VIEW_W;
+    const py = ((clientY - rect.top) / rect.height) * VIEW_H;
+    setCam((prev) => {
+      const k = Math.min(Math.max(prev.k * factor, 0.4), 4);
+      const scale = k / prev.k;
+      return {
+        k,
+        x: px - (px - prev.x) * scale,
+        y: py - (py - prev.y) * scale,
+      };
+    });
+  };
+
+  const fitToGraph = () => {
+    const box = graphBounds(positions);
+    if (!box) return;
+    const k = Math.min(
+      VIEW_W / Math.max(box.width, 1),
+      VIEW_H / Math.max(box.height, 1),
+      1.6,
+    );
+    setCam({
+      k,
+      x: VIEW_W / 2 - (box.x + box.width / 2) * k,
+      y: VIEW_H / 2 - (box.y + box.height / 2) * k,
+    });
+  };
+
+  const resetView = () => setCam({ k: 1, x: 0, y: 0 });
 
   // An edge whose endpoints are not both in the node set is not drawable. That
   // happens when the engine truncated the node list but kept the transfers, and
   // it is worth counting rather than silently dropping.
-  const drawable = useMemo(
-    () =>
-      edges.filter(
-        (e) => e.from_address && e.to_address && positions.has(e.from_address) && positions.has(e.to_address),
-      ),
-    [edges, positions],
-  );
-  const undrawable = edges.length - drawable.length;
+  //
+  // `renderKey` is built from real transaction identity plus a per-duplicate
+  // occurrence counter derived while walking the list. A bare array index would
+  // not be stable across a change in what is drawable, and hash+endpoints alone
+  // is not unique when a provider reports the same transfer twice.
+  const { drawable, undrawable } = useMemo(() => {
+    const seen = new Map();
+    const kept = [];
+    for (const e of edges) {
+      if (!e.from_address || !e.to_address) continue;
+      if (!positions.has(e.from_address) || !positions.has(e.to_address)) continue;
+      const identity = `${e.transaction_hash ?? "edge"}-${e.from_address}-${e.to_address}`;
+      const occurrence = seen.get(identity) ?? 0;
+      seen.set(identity, occurrence + 1);
+      kept.push({ edge: e, key: occurrence === 0 ? identity : `${identity}#${occurrence}` });
+    }
+    return { drawable: kept, undrawable: edges.length - kept.length };
+  }, [edges, positions]);
+
+  /*
+   * Wheel is bound imperatively rather than through `onWheel` on the element.
+   *
+   * React attaches its wheel listener passively, so `event.preventDefault()` in
+   * an `onWheel` handler is a no-op the browser logs as "Unable to
+   * preventDefault inside passive event listener invocation" -- and, worse, the
+   * page scrolls out from under the graph while the user is zooming it. An
+   * explicitly non-passive native listener is the only way to claim the event.
+   */
+  useEffect(() => {
+    const el = svgRef.current;
+    if (!el) return;
+    const onWheel = (event) => {
+      event.preventDefault();
+      zoomAbout(event.clientX, event.clientY, event.deltaY < 0 ? 1.12 : 1 / 1.12);
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+    // `zoomAbout` only reads refs and a functional setState, so re-binding on
+    // every camera change is unnecessary.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const onBackgroundDown = (event) => {
+    if (event.button !== 0) return;
+    gesture.current = { kind: "pan", x: event.clientX, y: event.clientY, cam };
+  };
+
+  const onNodeDown = (event, address) => {
+    if (event.button !== 0) return;
+    // Stop the canvas from also starting a pan, so dragging a node moves the
+    // node and dragging the background moves the camera. Never both.
+    event.stopPropagation();
+    const at = positions.get(address);
+    if (!at) return;
+    const point = toWorld(event, svgRef.current, cam);
+    gesture.current = { kind: "node", address, dx: at.x - point.x, dy: at.y - point.y };
+  };
+
+  useEffect(() => {
+    const move = (event) => {
+      const g = gesture.current;
+      if (!g) return;
+      if (g.kind === "pan") {
+        const el = svgRef.current;
+        if (!el) return;
+        const rect = el.getBoundingClientRect();
+        setCam({
+          k: g.cam.k,
+          x: g.cam.x + ((event.clientX - g.x) / rect.width) * VIEW_W,
+          y: g.cam.y + ((event.clientY - g.y) / rect.height) * VIEW_H,
+        });
+      } else {
+        // Past a few pixels it is a drag, not a click, so selection is
+        // suppressed on pointer up.
+        g.moved = true;
+        const point = toWorld(event, svgRef.current, cam);
+        setDragged((prev) => ({
+          ...prev,
+          [g.address]: { x: point.x + g.dx, y: point.y + g.dy },
+        }));
+      }
+    };
+    const up = () => {
+      gesture.current = null;
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    return () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+    };
+  }, [cam]);
+
+  useEffect(() => {
+    fitToGraph();
+    // Fit once per node set, not per camera change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [laidOut.positions]);
 
   return (
     <div className="space-y-3">
-      <div className="overflow-x-auto rounded-lg border bg-muted/20">
+      <div className="flex flex-wrap items-center justify-end gap-1.5">
+        <Button size="icon-sm" variant="outline" onClick={() => zoomAbout(...pointerCentre(svgRef.current), 1.25)} title="Zoom in" aria-label="Zoom in">
+          <Plus className="size-3.5" />
+        </Button>
+        <Button size="icon-sm" variant="outline" onClick={() => zoomAbout(...pointerCentre(svgRef.current), 1 / 1.25)} title="Zoom out" aria-label="Zoom out">
+          <Minus className="size-3.5" />
+        </Button>
+        <Button size="sm" variant="outline" onClick={fitToGraph}>
+          Fit
+        </Button>
+        <Button size="sm" variant="outline" onClick={resetView}>
+          Reset
+        </Button>
+        <span className="text-[10px] tabular-nums text-muted-foreground">
+          {Math.round(cam.k * 100)}%
+        </span>
+      </div>
+
+      <div className="relative overflow-hidden rounded-lg border bg-muted/20">
         <svg
+          ref={svgRef}
           viewBox={`0 0 ${VIEW_W} ${VIEW_H}`}
-          className="h-auto w-full min-w-[720px]"
+          className="h-[clamp(420px,58vh,820px)] w-full touch-none select-none"
           role="img"
-          aria-label="Fund flow between addresses, laid out by hop distance from the subject"
+          aria-label="Fund flow between addresses, laid out by hop distance from the subject. Drag to pan, scroll to zoom, drag a node to move it."
+          onPointerDown={onBackgroundDown}
         >
+        <g transform={`translate(${cam.x} ${cam.y}) scale(${cam.k})`}>
           <defs>
             <marker
               id="ff-arrow"
@@ -238,14 +436,14 @@ function Graph2D({ nodes, edges, onSelect }) {
             })}
 
           {/* Edges */}
-          {drawable.map((edge, i) => {
+          {drawable.map(({ edge, key }) => {
             const from = positions.get(edge.from_address);
             const to = positions.get(edge.to_address);
             const flagged = (edge.risk_flags || []).length > 0;
             const mid = edgeMidpoint(from, to);
             const dimmed = hover && hover !== edge.from_address && hover !== edge.to_address;
             return (
-              <g key={`${edge.transaction_hash}-${i}`}>
+              <g key={key}>
                 <path
                   d={edgePath(from, to)}
                   fill="none"
@@ -293,10 +491,16 @@ function Graph2D({ nodes, edges, onSelect }) {
                 key={node.address}
                 transform={`translate(${pos.x} ${pos.y})`}
                 opacity={dimmed ? 0.25 : 1}
-                className="cursor-pointer"
+                className="cursor-grab"
                 onMouseEnter={() => setHover(node.address)}
                 onMouseLeave={() => setHover(null)}
-                onClick={() => onSelect?.(node)}
+                onPointerUp={() => {
+                  // Only a click without a drag is a selection. A node that was
+                  // dragged into place should not also open the details panel.
+                  if (gesture.current?.moved) return;
+                  onSelect?.(node);
+                }}
+                onPointerDown={(e) => onNodeDown(e, node.address)}
               >
                 <circle
                   r={r}
@@ -328,6 +532,7 @@ function Graph2D({ nodes, edges, onSelect }) {
               </g>
             );
           })}
+        </g>
         </svg>
       </div>
 
@@ -346,7 +551,7 @@ function Graph2D({ nodes, edges, onSelect }) {
 // NODE DETAIL
 // ---------------------------------------------------------------------------
 
-function NodeInspector({ node, chain, onClose }) {
+export function NodeInspector({ node, chain, onClose }) {
   if (!node) return null;
   // Provider-supplied, so scheme-checked before it becomes an href. This is
   // the most clickable of the three citation links in the app: it sits inside
@@ -508,12 +713,28 @@ export function FundFlowGraph({
   transactions = [],
   chain = null,
   seed = null,
+  /**
+   * Lifts node selection out of the graph. When supplied, the graph reports the
+   * selected node here and renders no inspector of its own, so the caller can put
+   * the details in a drawer and leave the graph at full width. When omitted the
+   * graph keeps its original inline inspector, which shrinks nothing but sits
+   * under the canvas.
+   */
+  onSelectNode,
 }) {
   const [mode, setMode] = useState("2d");
   const [selected, setSelected] = useState(null);
 
   const nodeList = useMemo(() => (Array.isArray(nodes) ? nodes : []), [nodes]);
   const edgeList = useMemo(() => (Array.isArray(edges) ? edges : []), [edges]);
+
+  const select = (node) => {
+    if (onSelectNode) {
+      onSelectNode(node);
+      return;
+    }
+    setSelected(node);
+  };
 
   if (nodeList.length === 0) {
     return (
@@ -554,7 +775,7 @@ export function FundFlowGraph({
       </div>
 
       {mode === "2d" ? (
-        <Graph2D nodes={nodeList} edges={edgeList} onSelect={setSelected} />
+        <Graph2D nodes={nodeList} edges={edgeList} onSelect={select} />
       ) : (
         <Suspense
           fallback={
@@ -567,7 +788,9 @@ export function FundFlowGraph({
         </Suspense>
       )}
 
-      <NodeInspector node={selected} chain={chain} onClose={() => setSelected(null)} />
+      {onSelectNode ? null : (
+        <NodeInspector node={selected} chain={chain} onClose={() => setSelected(null)} />
+      )}
 
       <GraphLegend />
 

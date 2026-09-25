@@ -427,15 +427,14 @@ function ResultPanel({ response, onReset }) {
             Open investigation
           </Button>
         ) : null}
+        {/* A link only when one genuinely exists. Its absence is not reported as
+            a problem: the report is optional and available from the
+            investigation page, so a missing file here needs no explanation. */}
         {href ? (
           <Button variant="outline" render={<a href={href} target="_blank" rel="noreferrer noopener" />}>
-            Open PDF dossier
+            Open PDF report
           </Button>
-        ) : (
-          <span className="text-xs text-muted-foreground">
-            No PDF dossier was generated for this run.
-          </span>
-        )}
+        ) : null}
         {!response.investigation_id ? (
           <span className="text-xs text-muted-foreground">
             This run was not saved to history.
@@ -711,15 +710,11 @@ export default function TraceConsole() {
               />
               Save to history
             </label>
-            <label className="flex cursor-pointer items-center gap-2 text-xs">
-              <input
-                type="checkbox"
-                checked={generateReport}
-                onChange={(e) => setGenerateReport(e.target.checked)}
-                className="size-3.5 accent-[var(--primary)]"
-              />
-              Generate PDF dossier
-            </label>
+            {/* The report is no longer a pre-trace requirement. It moved to the
+                investigation page as a single "Export PDF Report" action, so the
+                main journey is Trace -> review -> export. Generating a dossier
+                before the investigation has even run meant asking the user to
+                commit to a report format before there was a result to describe. */}
             <Button
               type="button"
               size="sm"
@@ -734,6 +729,25 @@ export default function TraceConsole() {
           {showAdvanced ? (
             <div className="rounded-md border border-dashed bg-muted/30 p-3">
               <p className="mb-3 text-xs font-medium">Investigation settings</p>
+
+              {/*
+                Kept, but as a preference rather than a step. Turning this on has
+                the investigation build its dossier as soon as the trace
+                finishes, which is useful for an analyst running a batch; leaving
+                it off is fine, because the report can be exported from the
+                investigation page at any time. The label no longer promises a
+                separate artefact type.
+              */}
+              <label className="mb-3 flex cursor-pointer items-center gap-2 text-xs">
+                <input
+                  type="checkbox"
+                  checked={generateReport}
+                  onChange={(e) => setGenerateReport(e.target.checked)}
+                  className="size-3.5 accent-[var(--primary)]"
+                />
+                Build the PDF report automatically when the trace finishes
+              </label>
+
               <AdvancedOptions
                 options={options}
                 setOptions={setOptions}

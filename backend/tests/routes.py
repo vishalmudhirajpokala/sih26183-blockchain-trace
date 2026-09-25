@@ -92,6 +92,56 @@ def main_check() -> int:
         failures.append("health does not report the auth mode")
 
     # -- RULE 7: no secret may appear anywhere in the schema --------------
+    # -- the report must actually render ---------------------------------
+    # A report route that is registered but throws is worse than an absent one:
+    # the UI offers "Export PDF Report", the call 500s, and the failure is
+    # reported as `ValueError` with no field named. This renders a report from
+    # whatever stored investigations exist, so a regression in the renderer is
+    # caught here rather than by a user clicking the button.
+    import tempfile  # noqa: E402
+
+    from fastapi.testclient import TestClient  # noqa: E402
+    from services.repository import get_repository  # noqa: E402
+    from services.report_service import render_trace_report  # noqa: E402
+    from services.trace_orchestrator import TraceResult  # noqa: E402
+
+    # In demo auth there is no signed-in user, so the row-level owner filter is
+    # None -- the same value the route itself resolves.
+    rows, _ = get_repository().list_investigations(limit=1, offset=0, user_id=None)
+    if not rows:
+        print()
+        print("SKIP  no stored investigation available to render a report from")
+    else:
+        row = rows[0]
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as fh:
+                out = fh.name
+            render_trace_report(
+                TraceResult.from_dict(row["result"]),
+                out,
+                investigator="contract-test",
+            )
+            import os  # noqa: E402
+
+            size = os.path.getsize(out)
+            with open(out, "rb") as fh:
+                magic = fh.read(5)
+            os.unlink(out)
+            if size < 1024:
+                failures.append(
+                    f"report rendered to only {size} bytes; a PDF dossier is not empty"
+                )
+            elif magic != b"%PDF-":
+                failures.append(
+                    f"report is not a PDF: file starts with {magic!r}, not %PDF-"
+                )
+            else:
+                print(f"report renders   : {size} bytes, valid %PDF- header")
+        except Exception as exc:  # noqa: BLE001
+            failures.append(
+                f"REPORT RENDER FAILED: {type(exc).__name__}: {exc}"
+            )
+
     # The OpenAPI document is fetched by the browser. A service-role key or a
     # real provider key showing up in it would be a leak in the one artefact
     # every client can read.

@@ -277,7 +277,11 @@ def render_trace_report(
     story.append(_kv_table([
         ["Risk score", f"{risk.risk_score} / 100"],
         ["Risk level", Paragraph(
-            f'<font color="{_RISK_COLOURS.get(risk.risk_level.value, _MUTED).hexval()[2:]}">'
+            # `hexval()` already returns a form ReportLab accepts ("0xb04a00").
+            # Slicing off the "0x" prefix left a bare "b04a00" with no sigil,
+            # which `toColor` rejects -- so every report failed to render with
+            # `ValueError: Invalid color value 'b04a00'`, for every risk level.
+            f'<font color="{_RISK_COLOURS.get(risk.risk_level.value, _MUTED).hexval()}">'
             f"<b>{risk.risk_level.value}</b></font>", styles.body,
         )],
         ["Signals", str(len(risk.indicators))],

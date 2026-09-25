@@ -18,7 +18,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { ArrowLeft, Download, RefreshCw } from "lucide-react";
+import { ArrowLeft, Download, FileText } from "lucide-react";
 import { toast } from "sonner";
 
 import { api, reportHref } from "@/lib/api";
@@ -41,10 +41,17 @@ import {
   ValueRow,
 } from "@/components/common";
 import { RiskPanel } from "@/components/risk-panel";
-import { FundFlowGraph } from "@/components/fund-flow-graph";
+import { FundFlowGraph, NodeInspector } from "@/components/fund-flow-graph";
 import { TransactionTable } from "@/components/transaction-table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 
 export default function InvestigationDetail() {
   const { id } = useParams();
@@ -53,6 +60,10 @@ export default function InvestigationDetail() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [regenerating, setRegenerating] = useState(false);
+  // The entity drawer. Node details used to sit permanently under the graph in a
+  // narrow column beside it; they now open over the graph on demand, so the
+  // canvas keeps the whole content width.
+  const [inspected, setInspected] = useState(null);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -72,14 +83,17 @@ export default function InvestigationDetail() {
     if (regenerating) return;
     setRegenerating(true);
     try {
-      // This re-renders from the stored result. It does not re-trace, so the
-      // graph in the dossier is the same graph on screen.
+      // Built from the stored result by the existing backend endpoint. It does
+      // not re-trace, so the graph in the dossier is the graph on screen, and
+      // `record_url` is resolved through the backend's own report route rather
+      // than a path assembled here.
       const res = await api.regenerateReport(id);
       setRecord((prev) => (prev ? { ...prev, report_url: res.report_url } : prev));
-      toast.success("Report re-rendered from the stored result.");
-      toast.info(res.note);
+      toast.success("Report exported successfully.");
+      if (res.note) toast.info(res.note);
     } catch (e) {
-      toast.error(e.message || "The report could not be re-rendered.");
+      // The action is not disabled by a failure, so it can simply be retried.
+      toast.error(e.message || "Unable to generate the PDF report. Please try again.");
     } finally {
       setRegenerating(false);
     }
@@ -161,24 +175,47 @@ export default function InvestigationDetail() {
         }
         actions={
           <>
+            {/*
+              One report action, not two. Previously this header only offered a
+              download once a dossier already existed, and otherwise showed an
+              outline "Re-render PDF" -- so for a case that had never been
+              exported there was no primary way to get one, and the page ended
+              with a "PDF dossier: Not available" row that read like a dead end.
+
+              Both states now go through the same control and the same real
+              backend endpoint, `POST /reports/{id}/regenerate`, which rebuilds
+              the PDF from the stored result. It does not re-trace, so the
+              dossier cannot describe a different moment than the page showing
+              it, and it works for a partial case because the PDF renders the
+              partial status rather than hiding it.
+            */}
+            {/*
+              Two branches rather than one button with a conditional `render`
+              prop. Base UI's Button treats a present-but-undefined `render` as
+              "no element to render into" and renders nothing, so the one-control
+              version silently disappeared whenever no report existed yet --
+              exactly the case that needed it most.
+            */}
             {pdf ? (
-              <Button render={<a href={pdf} target="_blank" rel="noopener noreferrer" />}>
+              <Button
+                render={
+                  <a href={pdf} target="_blank" rel="noopener noreferrer" />
+                }
+                title="Opens the report already stored for this investigation."
+              >
                 <Download data-icon="inline-start" />
-                Download PDF
+                Export PDF Report
               </Button>
-            ) : null}
-            <Button
-              variant="outline"
-              onClick={regenerate}
-              disabled={regenerating}
-              title="Re-renders the PDF from the stored result. It does not re-run the trace, so the dossier cannot describe a different moment than this page."
-            >
-              <RefreshCw
-                data-icon="inline-start"
-                className={regenerating ? "animate-spin" : undefined}
-              />
-              {regenerating ? "Re-rendering…" : "Re-render PDF"}
-            </Button>
+            ) : (
+              <Button
+                onClick={regenerate}
+                disabled={regenerating}
+                title="Builds the report from this investigation's stored result. It does not re-run the trace."
+              >
+                <FileText data-icon="inline-start" />
+                {regenerating ? "Generating report…" : "Export PDF Report"}
+              </Button>
+            )}
           </>
         }
       />
@@ -223,7 +260,17 @@ export default function InvestigationDetail() {
         ]}
       />
 
-      <div className="grid gap-6 lg:grid-cols-[1fr_20rem]">
+      {/*
+        One column, full width.
+        This used to be `lg:grid-cols-[1fr_20rem]` with the graph in the `1fr`
+        and a permanent "This case" aside beside it. On a normal desktop that
+        left the graph -- and the 3D canvas inside it -- around 300px wide,
+        which is why the 3D view read as a static object: a working
+        CameraControls on a canvas that narrow has nowhere to move. The graph is
+        the primary investigation surface, so it now takes the full measure and
+        everything secondary sits below it or behind a disclosure.
+      */}
+      <div className="min-w-0 space-y-6">
         <div className="min-w-0 space-y-6">
           <SectionCard
             title="Risk assessment"
@@ -242,8 +289,39 @@ export default function InvestigationDetail() {
               transactions={transactions}
               chain={result.chain}
               seed={result.seed}
+              onSelectNode={setInspected}
             />
           </SectionCard>
+
+          {/*
+            Entity details, over the graph rather than beside it. The sheet is
+            narrow by design, but it floats: the graph underneath keeps its full
+            width and the selected node stays in view, so the entity is read in
+            context rather than after navigating away from it.
+          */}
+          <Sheet
+            open={Boolean(inspected)}
+            onOpenChange={(open) => {
+              if (!open) setInspected(null);
+            }}
+          >
+            <SheetContent side="right" className="w-full overflow-y-auto sm:max-w-md">
+              <SheetHeader>
+                <SheetTitle>Address details</SheetTitle>
+                <SheetDescription>
+                  What the engine established about this address, and the evidence
+                  behind each claim.
+                </SheetDescription>
+              </SheetHeader>
+              <div className="px-4 pb-6">
+                <NodeInspector
+                  node={inspected}
+                  chain={result.chain}
+                  onClose={() => setInspected(null)}
+                />
+              </div>
+            </SheetContent>
+          </Sheet>
 
           <SectionCard
             title="Transaction ledger"
@@ -257,8 +335,23 @@ export default function InvestigationDetail() {
           </SectionCard>
         </div>
 
-        <aside className="space-y-6">
-          <SectionCard title="This case">
+        {/*
+          Investigation metadata, folded away by default. It is genuinely
+          useful for an analyst and for methodological transparency, but it is
+          not what the page is for, and next to the graph it was costing the
+          graph its width.
+        */}
+        <details className="rounded-xl border bg-card/50">
+          <summary className="cursor-pointer list-none px-4 py-3 text-sm font-medium marker:hidden">
+            <span className="text-muted-foreground">
+              Investigation details
+            </span>{" "}
+            <span className="text-xs text-muted-foreground">
+              id, seed, scope, timing and provider attribution
+            </span>
+          </summary>
+          <div className="border-t px-4 py-3">
+            <SectionCard title="This case">
             <dl className="divide-y">
               <ValueRow label="Investigation id" mono copyable>
                 {record.id}
@@ -287,7 +380,19 @@ export default function InvestigationDetail() {
               <ValueRow label="Saved">
                 {record.created_at ? formatDateTime(record.created_at) : null}
               </ValueRow>
-              <ValueRow label="PDF dossier" copyable={Boolean(record.report_url)}>
+              {/* Report status, phrased as state rather than as a dead end. The
+                  report is produced on demand from the button at the top, so
+                  "not generated yet" is a normal condition here, not a failure
+                  and not the only way to get one. */}
+              <ValueRow
+                label="PDF report"
+                reason={
+                  record.report_url
+                    ? null
+                    : "No report has been exported for this investigation yet. Use Export PDF Report at the top of the page to build one."
+                }
+                copyable={Boolean(record.report_url)}
+              >
                 {record.report_url ? record.report_url : null}
               </ValueRow>
             </dl>
@@ -328,8 +433,9 @@ export default function InvestigationDetail() {
             </SectionCard>
           ) : null}
 
-          <ProviderLedger usage={metadata.provider_usage} />
-        </aside>
+            <ProviderLedger usage={metadata.provider_usage} />
+          </div>
+        </details>
       </div>
 
       <EvidenceNotes notes={notes} />
