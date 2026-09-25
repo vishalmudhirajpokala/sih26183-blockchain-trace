@@ -153,6 +153,12 @@ class TraceResponse(BaseModel):
     result: Dict[str, Any]
     report_url: Optional[str] = None
     investigation_id: Optional[str] = None
+    # Whether this result was alerted on, and what happened when it was. Present
+    # on every trace response, including when no alert was warranted, so a client
+    # can tell "below threshold" from "alerting is not configured" from "alerting
+    # tried and failed" -- three different things, none of which should be
+    # invisible to an integration.
+    alert: Optional[Dict[str, Any]] = None
 
 
 class ChainCapability(BaseModel):

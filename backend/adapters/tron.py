@@ -30,6 +30,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from adapters.base import AdapterTrace, ChainAdapter, NetworkInfo
 from models.schemas import (
+    AttributionSource,
     Availability,
     BlockchainTransaction,
     Chain,

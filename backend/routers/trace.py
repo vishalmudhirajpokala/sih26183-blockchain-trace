@@ -24,6 +24,7 @@ from models.api import (
 from models.schemas import Chain, TraceStatus
 from services.auth import AuthState, resolve_identity
 from services.report_service import render_trace_report, report_filename_for
+from services.alerting import build_alert, dispatch, should_alert
 from services.repository import get_repository
 from services.chain_detection import AmbiguousChainError
 from services.trace_orchestrator import DetectionError, detect_only, run_investigation
@@ -281,8 +282,49 @@ def create_trace(
         )
         payload = result.to_dict()
 
+    # -- alert --------------------------------------------------------
+    # Raised on the engine's own verdict, after the result is complete, so an
+    # alert can never describe a different investigation than the one stored.
+    #
+    # Wrapped whole: a dispatch problem is reported, never raised, because the
+    # investigator who ran this trace is waiting on the response and must get
+    # their findings whether or not a third party's endpoint is reachable.
+    alert_record: Optional[dict] = None
+    try:
+        decision = should_alert(
+            result.risk.risk_level.value, result.risk.risk_score
+        )
+        if decision["alert"]:
+            alert_record = dispatch(
+                build_alert(investigation_id, payload, base_url=_public_base_url())
+            )
+            alert_record.update(decision)
+        else:
+            alert_record = {"dispatched": False, "reason": "below alert threshold"}
+            alert_record.update(decision)
+    except Exception as exc:  # noqa: BLE001
+        alert_record = {
+            "dispatched": False,
+            "reason": f"alert evaluation failed: {type(exc).__name__}",
+        }
+
     return TraceResponse(
         result=payload,
         report_url=report_url,
         investigation_id=investigation_id,
+        alert=alert_record,
     )
+
+
+def _public_base_url() -> str:
+    """
+    The base URL to put in an alert's link, if the operator configured one.
+
+    Empty by default, in which case alerts carry no link. It is never derived
+    from an inbound request header: a `Host` header is caller-controlled, and
+    putting one into a URL that gets delivered to a third party would let the
+    caller redirect an investigator's link at a host of their choosing.
+    """
+    import os
+
+    return os.getenv("BLOCKTRACE_PUBLIC_URL", "").strip()

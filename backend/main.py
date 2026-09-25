@@ -1310,7 +1310,18 @@ def _config_summary() -> Dict[str, Any]:
         # unpopulated" and "VASP attribution is silently returning nothing",
         # which is what it looked like before.
         "entity_intelligence": _entity_intel_summary(),
+        "alerting": _alerting_summary(),
     }
+
+
+def _alerting_summary() -> dict:
+    """Whether alerts can be delivered, and under what rule."""
+    from services.alerting import alert_capability
+
+    try:
+        return alert_capability()
+    except Exception as exc:  # noqa: BLE001
+        return {"available": False, "error": type(exc).__name__}
 
 
 def _entity_intel_summary() -> dict:
