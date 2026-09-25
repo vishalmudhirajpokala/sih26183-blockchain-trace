@@ -142,6 +142,51 @@ def main_check() -> int:
                 f"REPORT RENDER FAILED: {type(exc).__name__}: {exc}"
             )
 
+    # -- the risk level colour must be renderable at EVERY level -----------
+    # The "Risk level" row interpolates a colour into a ReportLab `<font>`
+    # attribute. That expression once did `HexColor.hexval()[2:]`, which strips
+    # the "0x" and leaves a bare "b04a00" that `toColor` rejects -- so every
+    # report raised `ValueError: Invalid color value 'b04a00'`, and because the
+    # row is unconditional it failed for every risk level, not just one.
+    #
+    # Rendering a single stored case only covers whichever level that case
+    # happens to be, so this asserts all of them directly. It is a guard on the
+    # colour format only: no report layout, content or metadata is touched.
+    from reportlab.lib import colors as _rl_colors  # noqa: E402
+    from reportlab.lib.styles import getSampleStyleSheet as _styles  # noqa: E402
+    from reportlab.platypus import (  # noqa: E402
+        Paragraph as _Paragraph,
+        SimpleDocTemplate as _Doc,
+    )
+
+    from services.report_service import _RISK_COLOURS  # noqa: E402
+
+    _ss = _styles()
+    for _level in _RISK_COLOURS:
+        # Exactly the value the renderer passes to <font color=...>.
+        _hexval = _RISK_COLOURS[_level].hexval()
+        try:
+            _Doc(
+                tempfile.mktemp(suffix=".pdf")
+            ).build(
+                [
+                    _Paragraph(
+                        f'<font color="{_hexval}"><b>{_level}</b></font>',
+                        _ss["BodyText"],
+                    )
+                ]
+            )
+        except Exception as exc:  # noqa: BLE001
+            failures.append(
+                f"REPORT COLOUR INVALID for risk level {_level}: "
+                f"{type(exc).__name__}: {exc}"
+            )
+    if not any(f.startswith("REPORT COLOUR") for f in failures):
+        print(
+            "report colours   : all "
+            f"{len(_RISK_COLOURS)} risk levels render"
+        )
+
     # The OpenAPI document is fetched by the browser. A service-role key or a
     # real provider key showing up in it would be a leak in the one artefact
     # every client can read.

@@ -440,6 +440,22 @@ export function ScoreBar({ score, max = 100, label = null, tone = null }) {
  */
 export function EvidenceNotes({ notes, title = "Evidence notes", className = "" }) {
   if (!Array.isArray(notes) || notes.length === 0) return null;
+  /*
+   * Report-renderer notes are dropped from the web UI entirely.
+   *
+   * The orchestrator records a note when the PDF fails, and that note arrives as
+   * data: "The PDF dossier could not be rendered (ValueError)." On the web page
+   * it was noise about the document generator sitting inside the investigation
+   * view -- an exception class name, in a panel about blockchain evidence, on a
+   * case whose transactions and risk are perfectly fine. The report is an export
+   * of the investigation, not part of it.
+   *
+   * The note is not deleted: it stays in the stored result and in the exported
+   * PDF, which is the right place for a renderer diagnostic. Here it is simply
+   * not about the investigation, so it is not shown.
+   */
+  const shown = notes.filter((note) => !REPORT_RENDERER_NOTE.test(String(note)));
+  if (shown.length === 0) return null;
   return (
     <div className={className}>
       <div className="flex items-center gap-2">
@@ -449,7 +465,7 @@ export function EvidenceNotes({ notes, title = "Evidence notes", className = "" 
         </h3>
       </div>
       <ul className="mt-2 space-y-2">
-        {notes.map((note, i) => (
+        {shown.map((note, i) => (
           <li
             key={i}
             className="rounded-md border border-dashed bg-muted/30 px-3 py-2 text-xs leading-5 text-muted-foreground"
@@ -462,16 +478,18 @@ export function EvidenceNotes({ notes, title = "Evidence notes", className = "" 
   );
 }
 
+/** Matches a stored note about the PDF/report renderer failing. */
+const REPORT_RENDERER_NOTE = /(?:pdf|dossier|report)[^.]*could not be (?:rendered|generated|created)/i;
+
 /**
  * Strip a Python exception class name out of a stored note.
  *
- * The orchestrator records failures with the exception type interpolated in,
- * e.g. "The PDF dossier could not be rendered (ValueError)." That is accurate
- * and it is useful to whoever debugs the renderer, but `ValueError` tells an
- * investigator nothing actionable -- it is a name in the implementation, not a
- * finding about the case. The note is rewritten to say what happened without
- * naming the internal type. Nothing is invented and no note is dropped: a note
- * with no exception class in it passes through untouched.
+ * Anything else the orchestrator recorded with the exception type interpolated
+ * in, e.g. "...failed (TimeoutError)", is rewritten to say what happened without
+ * naming the internal type. The type is accurate and it is useful to whoever
+ * debugs, but it is a name in the implementation, not a finding about the case.
+ * Nothing is invented and no note is dropped: a note with no exception class in
+ * it passes through untouched.
  */
 const EXCEPTION_IN_PARENS = /\s*\(([A-Z][A-Za-z0-9_]*(?:Error|Exception))\)/g;
 

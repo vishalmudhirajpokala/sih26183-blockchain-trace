@@ -16,7 +16,7 @@
  * it hit.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { ArrowLeft, Download, FileText } from "lucide-react";
 import { toast } from "sonner";
@@ -24,13 +24,16 @@ import { toast } from "sonner";
 import { api, reportHref } from "@/lib/api";
 import {
   chainLabel,
+  formatAmount,
   formatDateTime,
   formatDuration,
   formatCount,
   safeSourceUrl,
   statusInfo,
+  truncateHash,
 } from "@/lib/format";
 import {
+  AddressChip,
   Disclosure,
   ErrorPanel,
   EvidenceNotes,
@@ -54,6 +57,316 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
+
+/**
+ * The fund-flow summary: who the subject is, and where value actually moved.
+ *
+ * Every relationship here is read off a real normalized transaction's
+ * `from_address` and `to_address`. Nothing is inferred from hop order, nothing
+ * is picked because it happens to be first, and no amount is computed here --
+ * `amount` is summed only from values the backend actually returned, and a
+ * counterparty whose transfers carried no amount reports "Not available" rather
+ * than a zero that would read as "nothing moved".
+ *
+ * The subject is deliberately NOT called the source. A subject is frequently the
+ * *recipient*: the TRON case in the store is five inbound transfers and no
+ * outbound ones, so labelling that seed "SOURCE" and its counterparties
+ * "DESTINATIONS" would invert the actual direction of every transaction on the
+ * page. `subject` / `from` / `to` are three different things and the copy keeps
+ * them apart.
+ */
+function FundFlowSummary({ result, transactions, nodes, onSelectNode }) {
+  const seed = result.seed || null;
+  const chain = result.chain;
+  const seedKey = seed ? String(seed).toLowerCase() : null;
+
+  // A transaction-hash investigation is deterministic: the seed *is* that
+  // transaction, so it has exactly one source and one destination. An address
+  // investigation is not, and is aggregated instead.
+  const isSingleTransfer = result.input_type === "transaction_hash";
+
+  const flow = useMemo(() => {
+    if (isSingleTransfer) {
+      const tx = transactions[0] || null;
+      if (!tx) {
+        return { kind: "single", from: null, to: null, transaction: null };
+      }
+      return {
+        kind: "single",
+        from: tx.from_address || null,
+        to: tx.to_address || null,
+        transaction: tx,
+      };
+    }
+
+    /*
+     * Address investigation: group the seed's direct counterparties by the
+     * direction the transaction actually points.
+     *
+     * `inbound` = the other party sent value TO the subject. Those parties are
+     * senders, not destinations. `outbound` = the subject sent value to them.
+     * Keyed on the lowercased address, which is the identity the engine itself
+     * uses when de-duplicating nodes, so the same wallet cannot appear twice
+     * under case variants.
+     */
+    const inbound = new Map();
+    const outbound = new Map();
+
+    for (const tx of transactions) {
+      const from = tx?.from_address;
+      const to = tx?.to_address;
+      if (!from || !to) continue;
+
+      const fromIsSubject = seedKey !== null && from.toLowerCase() === seedKey;
+      const toIsSubject = seedKey !== null && to.toLowerCase() === seedKey;
+
+      // Transfers between two counterparties, with the subject on neither end,
+      // are not a direct relationship with the subject and are not listed here.
+      if (!fromIsSubject && !toIsSubject) continue;
+
+      const counterparty = fromIsSubject ? to : from;
+      const key = counterparty.toLowerCase();
+      const bucket = toIsSubject ? inbound : outbound;
+
+      const existing = bucket.get(key);
+      if (existing) {
+        existing.transfers += 1;
+        if (typeof tx.amount === "number") {
+          // Only amounts the backend actually returned are summed. A null stays
+          // null so the total can honestly report that it is unknown.
+          if (existing.total === null) existing.total = null;
+          else if (existing.total !== null) existing.total += tx.amount;
+          if (existing.largest === null || tx.amount > existing.largest) {
+            existing.largest = tx.amount;
+          }
+        }
+        existing.assets.add(tx.asset);
+        continue;
+      }
+
+      bucket.set(key, {
+        address: counterparty,
+        // The seed is excluded above, so a self-transfer shows up as a
+        // counterparty equal to the subject -- kept, because the engine emitted
+        // it and dropping it would understate the activity.
+        transfers: 1,
+        total: typeof tx.amount === "number" ? tx.amount : null,
+        largest: typeof tx.amount === "number" ? tx.amount : null,
+        assets: new Set(tx.asset ? [tx.asset] : []),
+      });
+    }
+
+    return {
+      kind: "multi",
+      inbound: [...inbound.values()].sort((a, b) => b.transfers - a.transfers),
+      outbound: [...outbound.values()].sort((a, b) => b.transfers - a.transfers),
+    };
+  }, [isSingleTransfer, transactions, seedKey]);
+
+  if (isSingleTransfer) {
+    const { from, to, transaction } = flow;
+    if (!from && !to) return null;
+    return (
+      <SectionCard
+        title="Transaction flow"
+        description="The transfer this hash identifies. Source and destination are that transaction's own from and to."
+        bodyClassName="space-y-4"
+      >
+        <FlowRow
+          role="Source"
+          address={from}
+          chain={chain}
+          onSelect={onSelectNode}
+          nodes={nodes}
+        />
+        <FlowArrow
+          caption={
+            transaction
+              ? typeof transaction.timestamp === "number"
+                ? new Date(transaction.timestamp * 1000).toLocaleString()
+                : "Time not available"
+              : null
+          }
+        />
+        <FlowRow
+          role="Destination"
+          address={to}
+          chain={chain}
+          onSelect={onSelectNode}
+          nodes={nodes}
+          detail={
+            transaction
+              ? `${formatAmount(transaction.amount, null, transaction.asset)} · ${truncateHash(transaction.hash, 12, 10)}`
+              : null
+          }
+        />
+      </SectionCard>
+    );
+  }
+
+  const { inbound, outbound } = flow;
+  const total = inbound.length + outbound.length;
+  if (total === 0 && !seed) return null;
+
+  return (
+    <SectionCard
+      title="Fund flow summary"
+      description="The subject and the addresses value actually moved between, read from the transfers below."
+      bodyClassName="space-y-4"
+    >
+      <FlowRow
+        role="Subject"
+        address={seed}
+        chain={chain}
+        hint="the address this investigation started from"
+        onSelect={onSelectNode}
+        nodes={nodes}
+      />
+
+      {total === 0 ? (
+        <p className="text-sm text-muted-foreground">
+          No direct transfer between the subject and another address was found in
+          the transactions this run returned.
+        </p>
+      ) : (
+        <>
+          <FlowArrow
+            caption={`${nodes.length} ${nodes.length === 1 ? "address" : "addresses"} · ${transactions.length} ${transactions.length === 1 ? "transfer" : "transfers"}`}
+          />
+          {/*
+            Split by the direction the transactions point, and labelled for what
+            that direction means. "Outgoing" counterparties received value from
+            the subject, so they are destinations; "incoming" counterparties sent
+            it, so they are senders. Collapsing both into one "destinations"
+            list is the mistake this avoids.
+          */}
+          <div className="grid gap-4 sm:grid-cols-2">
+            <CounterpartyList
+              heading="Incoming"
+              caption="sent value to the subject"
+              items={inbound}
+              chain={chain}
+              onSelect={onSelectNode}
+              nodes={nodes}
+            />
+            <CounterpartyList
+              heading="Outgoing"
+              caption="received value from the subject"
+              items={outbound}
+              chain={chain}
+              onSelect={onSelectNode}
+              nodes={nodes}
+            />
+          </div>
+        </>
+      )}
+    </SectionCard>
+  );
+}
+
+function FlowArrow({ caption }) {
+  return (
+    <div className="flex items-center gap-3" aria-hidden="true">
+      <div className="flex flex-col items-center">
+        <div className="h-4 w-px bg-border" />
+        <div className="size-1.5 rotate-45 border-b border-r border-border" />
+      </div>
+      {caption ? <span className="text-xs text-muted-foreground">{caption}</span> : null}
+    </div>
+  );
+}
+
+function FlowRow({ role, address, chain, detail, hint, onSelect, nodes }) {
+  const inGraph = nodes.some(
+    (n) => n?.address && address && n.address.toLowerCase() === address.toLowerCase(),
+  );
+  return (
+    <div>
+      <p className="text-[0.7rem] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+        {role}
+      </p>
+      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
+        <AddressChip value={address} chain={chain} />
+        {detail ? <span className="text-sm">{detail}</span> : null}
+        {inGraph && onSelect ? (
+          <Button
+            size="xs"
+            variant="ghost"
+            onClick={() => onSelect(nodes.find((n) => n.address.toLowerCase() === address.toLowerCase()))}
+            title="Opens this address in the graph below"
+          >
+            Show in graph
+          </Button>
+        ) : null}
+      </div>
+      {hint ? <p className="text-xs text-muted-foreground">{hint}</p> : null}
+    </div>
+  );
+}
+
+function CounterpartyList({ heading, caption, items, chain, onSelect, nodes }) {
+  return (
+    <div>
+      <p className="text-[0.7rem] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+        {heading}{" "}
+        <span className="font-normal normal-case tracking-normal text-xs">
+          — {caption}
+        </span>
+      </p>
+      {items.length === 0 ? (
+        <p className="mt-1 text-sm text-muted-foreground">
+          None recorded
+        </p>
+      ) : (
+        <ul className="mt-2 space-y-1.5">
+          {items.map((item) => (
+            <li
+              // Business identity is the address itself, never the array index:
+              // a `key` of index would remount the row when the list re-sorts.
+              key={item.address.toLowerCase()}
+              className="rounded-md border bg-card px-2.5 py-2"
+            >
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <AddressChip value={item.address} chain={chain} />
+                {onSelect &&
+                nodes.some(
+                  (n) =>
+                    n?.address &&
+                    n.address.toLowerCase() === item.address.toLowerCase(),
+                ) ? (
+                  <Button
+                    size="xs"
+                    variant="ghost"
+                    onClick={() =>
+                      onSelect(
+                        nodes.find(
+                          (n) =>
+                            n.address.toLowerCase() ===
+                            item.address.toLowerCase(),
+                        ),
+                      )
+                    }
+                    title="Opens this address in the graph below"
+                  >
+                    Show in graph
+                  </Button>
+                ) : null}
+              </div>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                {item.transfers}{" "}
+                {item.transfers === 1 ? "transfer" : "transfers"}
+                {" · "}
+                {item.total === null
+                  ? "amount not available"
+                  : `${formatAmount(item.total, null, [...item.assets].join("/") || null)} total`}
+              </p>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
 
 export default function InvestigationDetail() {
   const { id } = useParams();
@@ -94,8 +407,16 @@ export default function InvestigationDetail() {
       toast.success("Report exported successfully.");
       if (res.note) toast.info(res.note);
     } catch (e) {
-      // The action is not disabled by a failure, so it can simply be retried.
-      toast.error(e.message || "Unable to generate the PDF report. Please try again.");
+      /*
+       * The backend's failure detail is deliberately not surfaced. It is an
+       * implementation string -- an exception class name, a renderer message --
+       * and it tells an investigator nothing they can act on, while telling
+       * them a great deal about how the software is built. The full error is
+       * logged for a developer; the user gets a clean sentence and a button
+       * that is still enabled, because a failure must be retryable.
+       */
+      console.error("Report export failed for investigation", id, e);
+      toast.error("Unable to generate the PDF report. Please try again.");
     } finally {
       setRegenerating(false);
     }
@@ -320,6 +641,25 @@ export default function InvestigationDetail() {
       */}
       <div className="min-w-0 space-y-6">
         <div className="min-w-0 space-y-6">
+          {/*
+            The flow summary is the first section of the investigation, before
+            the risk panel and before the graph.
+
+            The order it establishes is the order the questions arrive in: who
+            is the subject and where did the value move, then why is that risky,
+            then show me the shape, then show me the rows. The risk panel's
+            engine summary, the score derivation and the methodology all read as
+            *why the software says* something, and putting them first made an
+            investigator page through the analysis to find out where the money
+            went.
+          */}
+          <FundFlowSummary
+            result={result}
+            transactions={transactions}
+            nodes={nodes}
+            onSelectNode={setInspected}
+          />
+
           {/*
             `RiskPanel` renders its own `SectionCard`, so it is mounted directly.
             Wrapping it in a second card titled "Risk assessment" -- which is what
