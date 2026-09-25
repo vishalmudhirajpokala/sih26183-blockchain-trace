@@ -44,15 +44,10 @@ export function SectionCards({ stats }) {
   if (cards.length === 0) return null
 
   return (
-    /*
-     * The block's original breakpoints were the container queries
-     * `@xl/main:` and `@5xl/main:`, which measure a container named `main`.
-     * `ui/sidebar.jsx` renders `SidebarInset` as a bare `<main>` with no
-     * `@container/main` on it, so those queries never match and the row would
-     * stay one column at every width. `sm:`/`xl:` give the same 1 → 2 → 4
-     * progression against the viewport instead.
-     */
-    <div className="grid grid-cols-1 gap-4 px-4 *:data-[slot=card]:bg-linear-to-t *:data-[slot=card]:from-primary/5 *:data-[slot=card]:to-card *:data-[slot=card]:shadow-xs lg:px-6 sm:grid-cols-2 xl:grid-cols-4 dark:*:data-[slot=card]:bg-card">
+    // The grid classes, the `*:data-[slot=card]:` gradient wash and the
+    // `dark:` override are Dashboard 01's, unchanged. The row is 1 column,
+    // then 2 past the `main` container's xl size, then 4 past 5xl.
+    <div className="grid grid-cols-1 gap-4 px-4 *:data-[slot=card]:bg-linear-to-t *:data-[slot=card]:from-primary/5 *:data-[slot=card]:to-card *:data-[slot=card]:shadow-xs lg:px-6 @xl/main:grid-cols-2 @5xl/main:grid-cols-4 dark:*:data-[slot=card]:bg-card">
       {cards.map((card) => {
         const TrendIcon = card.trend?.direction === "down" ? TrendingDownIcon : TrendingUpIcon
         const hasValue = card.value !== null && card.value !== undefined && card.value !== ""

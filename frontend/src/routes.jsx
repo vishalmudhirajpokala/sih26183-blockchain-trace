@@ -54,7 +54,7 @@ const NotFound = lazy(() => import("@/pages/not-found"));
  * nearest named ancestor.
  */
 export const ROUTE_TITLES = {
-  "/app": "Dashboard",
+  "/app": "Blockchain Intelligence Dashboard",
   "/app/trace": "Trace Console",
   "/app/investigations": "Investigations",
   "/app/reports": "Reports",

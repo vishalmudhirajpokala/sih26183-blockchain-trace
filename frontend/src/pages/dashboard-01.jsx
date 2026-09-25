@@ -1,19 +1,34 @@
 /**
- * Dashboard — the investigation overview, on the imported Dashboard 01 layout.
+ * Dashboard — the BlockTrace overview, on the shadcn dashboard-01 layout.
  *
- * The layout is the shadcn block's: a `SectionCards` stat row, a
- * `ChartAreaInteractive` timeline, and a table of recent cases. The numbers are
- * not the block's. The block arrived with "Total Revenue $1,250.00" and 120 rows
- * of invented visitor traffic, which in a forensic console would be a claim
- * about evidence that nothing measured.
+ * The composition is the block's, in the block's order: a page header, the
+ * `SectionCards` stat row, the `ChartAreaInteractive` timeline, and a table of
+ * recent cases. The tokens, radius scale, type stack and chart colours all come
+ * from the `base-nova` theme in `index.css`, which is the theme
+ * `npx shadcn@latest add dashboard-01` is built against, so this page is the
+ * same design system rather than something modelled on it.
  *
- * Every figure below is read from `/analytics/overview` and
- * `/investigations`, or shown as unavailable. The `data_basis` note is always
- * on screen, because the denominator is the whole point: these are statistics
- * over the investigations this account has run, never over a chain.
+ * The data is the only thing that is BlockTrace's, and it is the same data the
+ * overview page has always read:
  *
- * `pages/dashboard.jsx` is the previous layout. It is untouched and still
- * builds; it is simply not routed.
+ *   api.analyticsOverview()   -> the four stat tiles and the daily timeline
+ *   api.riskTrend()           -> the most recent saved case's risk score
+ *   api.investigations(...)   -> the recent-cases table
+ *
+ * Nothing here is invented. The block arrived carrying "Total Revenue
+ * $1,250.00", 92 rows of April-2024 visitor traffic and a hard-coded
+ * `2024-06-30` window anchor; all of that is gone. A counter the API did not
+ * report renders as `Not available`, because "0 investigations" and "the
+ * overview call did not return this field" are different facts and only one of
+ * them is a measurement.
+ *
+ * The Dashboard 01 demo `DataTable` is deliberately not mounted. It models
+ * reviewer assignment, targets and limits — none of which exist here — so the
+ * table below is built from the same `ui/table` primitives the real
+ * investigations page uses.
+ *
+ * `pages/dashboard.jsx` is the previous layout. It is untouched, still builds,
+ * and is not routed.
  */
 
 import { useEffect, useMemo, useState } from "react";
@@ -43,13 +58,15 @@ import { useAuth } from "@/hooks/use-auth";
 import { api } from "@/lib/api";
 import { NOT_AVAILABLE, chainLabel, formatCount, formatDateTime } from "@/lib/format";
 
-/**
- * How many recent cases the table shows. The same limit the previous overview
- * page used, so the endpoint behaves identically.
- */
+/** How many recent cases the table shows, as the previous overview page used. */
 const RECENT_LIMIT = 5;
 
-/** A count is only a count if the API reported one. `0` is a real answer. */
+/**
+ * A count is only a count if the API reported one.
+ *
+ * `0` is a real answer and is formatted. `undefined` means the field was absent
+ * and becomes `null`, which `SectionCards` renders as `Not available`.
+ */
 function count(n) {
   return typeof n === "number" ? formatCount(n) : null;
 }
@@ -57,6 +74,7 @@ function count(n) {
 export default function Dashboard01() {
   const { isDemo } = useAuth();
   const [overview, setOverview] = useState(null);
+  const [trend, setTrend] = useState(null);
   const [recent, setRecent] = useState(null);
   const [err, setErr] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -64,16 +82,14 @@ export default function Dashboard01() {
   useEffect(() => {
     let cancelled = false;
 
-    // The same two calls the previous overview page made. `risk-trend` is not
-    // requested: the chart plots `overview.timeline.by_day`, which is a
-    // per-day count of real investigations and already covers the same period
-    // with a unit the block's chart can label honestly.
     Promise.allSettled([
       api.analyticsOverview(),
+      api.riskTrend(),
       api.investigations({ limit: RECENT_LIMIT }),
-    ]).then(([o, r]) => {
+    ]).then(([o, t, r]) => {
       if (cancelled) return;
       setOverview(o.status === "fulfilled" ? o.value : null);
+      setTrend(t.status === "fulfilled" ? t.value : null);
       setRecent(r.status === "fulfilled" ? r.value : null);
       if (o.status === "rejected") setErr(o.reason);
       setLoading(false);
@@ -87,18 +103,8 @@ export default function Dashboard01() {
   const data = overview || {};
   const basis = data.data_basis || {};
 
-  /**
-   * The four tiles.
-   *
-   * `SectionCards` renders `NOT_AVAILABLE` for a null value, so each field is
-   * passed through as-is: a field the backend did not report becomes an
-   * explicit gap rather than a zero, because "0 investigations" and "the
-   * overview call did not return this" are different facts.
-   *
-   * The dependencies are the individual fields rather than `basis`, `entities`
-   * and `reports`, because those are objects rebuilt on every render and would
-   * make this memo useless.
-   */
+  // The individual fields rather than `basis` / `entities` / `reports`, because
+  // those are objects rebuilt on every render and would defeat the memo.
   const investigationCount = basis.investigation_count;
   const analysedHere = basis.analysed_here;
   const transactionsInspected = basis.transactions_inspected;
@@ -117,18 +123,18 @@ export default function Dashboard01() {
             : "Analysed count not reported",
       },
       {
-        label: "Transactions inspected",
+        label: "Transactions Inspected",
         value: count(transactionsInspected),
         note: source ? `Source: ${source}` : "From saved investigations only",
       },
       {
-        label: "Distinct entities (attributed)",
+        label: "Distinct Entities",
         value: count(distinctNames),
-        note: "Named entities in your saved results",
+        note: "Named entities across your saved results",
       },
       {
         // `reports` is a sibling of `data_basis`, not a field inside it.
-        label: "Reports generated",
+        label: "Reports Generated",
         value: count(reportsGenerated),
         note: "PDF dossiers written for your cases",
       },
@@ -146,10 +152,11 @@ export default function Dashboard01() {
   /**
    * The chart series.
    *
-   * `timeline.by_day` is `[{date, count}]` in `YYYY-MM-DD`, oldest first. It is
-   * mapped to a single `investigations` key so the area is labelled with what
-   * it measures. The chart anchors its 7/30/90-day window to the newest point,
-   * so a gap in the record shortens the visible range instead of emptying it.
+   * `timeline.by_day` is `[{date, count}]` in `YYYY-MM-DD`, oldest first, and is
+   * mapped to a single `investigations` key so the area is labelled with what it
+   * measures. `ChartAreaInteractive` anchors its 7d/30d/90d window to the newest
+   * point, so a gap in the record shortens the visible range instead of
+   * emptying the chart or padding it with synthetic days.
    */
   const byDay = data.timeline?.by_day;
   const timeline = useMemo(
@@ -159,6 +166,21 @@ export default function Dashboard01() {
         .map((p) => ({ date: p.date, investigations: p.count })),
     [byDay],
   );
+
+  /**
+   * The newest saved case's risk, from the real trend endpoint.
+   *
+   * `risk-trend` returns points oldest-first, so the last one with a numeric
+   * score is the most recent case that actually carries one. Reported as-is;
+   * when the endpoint is empty this is `null` and the line says so.
+   */
+  const latestRisk = useMemo(() => {
+    const points = Array.isArray(trend?.points) ? trend.points : [];
+    for (let i = points.length - 1; i >= 0; i -= 1) {
+      if (typeof points[i]?.risk_score === "number") return points[i];
+    }
+    return null;
+  }, [trend]);
 
   const recentItems = Array.isArray(recent?.items) ? recent.items : [];
 
@@ -181,7 +203,12 @@ export default function Dashboard01() {
   }
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-6">
+      {/*
+        `PageHeader` renders the block's page header verbatim: a flex row that
+        stacks on small screens, `md:items-end md:justify-between` on large ones,
+        with the title and its muted description in a `space-y-1` stack.
+      */}
       <PageHeader
         eyebrow="Overview"
         title="Blockchain Intelligence Dashboard"
@@ -208,6 +235,11 @@ export default function Dashboard01() {
 
       <SectionCards stats={stats} />
 
+      {/*
+        The block lays these sections out with the shell's own `gap`, and
+        `SectionCards` brings its own `px-4 lg:px-6`, so the chart and the table
+        are inset to the same measure rather than re-padded.
+      */}
       <div className="px-4 lg:px-6">
         <ChartAreaInteractive
           data={timeline}
@@ -215,19 +247,27 @@ export default function Dashboard01() {
           labels={{ investigations: "Investigations run" }}
           title="Investigations over time"
           caption="Cases you have run, by the day they were saved"
+          captionShort="By day saved"
           emptyMessage="No saved investigations yet. Run a trace to populate this chart."
         />
       </div>
 
       <div className="px-4 lg:px-6">
-        <div className="mb-3 flex items-baseline justify-between gap-4">
+        <div className="mb-3 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
           <h2 className="text-lg font-semibold tracking-tight">Recently saved</h2>
-          <Link
-            to="/app/investigations"
-            className="text-sm text-muted-foreground underline-offset-4 hover:underline"
-          >
-            All investigations
-          </Link>
+          <div className="flex items-baseline gap-3 text-sm">
+            <span className="text-muted-foreground">
+              {latestRisk
+                ? `Latest risk ${latestRisk.risk_level ?? NOT_AVAILABLE} (${latestRisk.risk_score}/100)`
+                : "Latest risk score not available"}
+            </span>
+            <Link
+              to="/app/investigations"
+              className="text-muted-foreground underline-offset-4 hover:underline"
+            >
+              All investigations
+            </Link>
+          </div>
         </div>
 
         {recentItems.length > 0 ? (
@@ -282,6 +322,12 @@ export default function Dashboard01() {
         )}
       </div>
 
+      {/*
+        Kept from the previous overview page. This is a forensic console: the
+        denominator behind every number above has to stay on screen, or "12
+        investigations" reads as a statement about the chain rather than about
+        one operator's own cases.
+      */}
       <section className="rounded-xl border bg-card/50 p-4 text-xs leading-6 text-muted-foreground">
         <p>
           <strong className="text-foreground">What this describes:</strong>{" "}

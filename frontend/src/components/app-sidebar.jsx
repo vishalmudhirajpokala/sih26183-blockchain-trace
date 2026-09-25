@@ -92,8 +92,8 @@ function ChainStrip() {
 
   if (failed || !chains) {
     return (
-      <p className="text-[10px] text-slate-500">
-        {failed ? "Chain list unavailable" : "Reading chain listâ€¦"}
+      <p className="text-[10px] text-muted-foreground">
+        {failed ? "Chain list unavailable" : "Reading chain list…"}
       </p>
     );
   }
@@ -106,7 +106,7 @@ function ChainStrip() {
           <span
             key={c}
             title={entry?.limitation || `${entry?.chain_name || c}: no declared limitation`}
-            className="rounded bg-slate-800/80 px-1.5 py-0.5 text-[9px] font-semibold tracking-wider text-slate-300"
+            className="rounded border border-border bg-background px-1.5 py-0.5 text-[9px] font-semibold tracking-wider text-foreground"
           >
             {chainShort(c)}
           </span>
@@ -125,10 +125,10 @@ export function AppSidebar({ ...props }) {
       ? "SIGNED IN"
       : status?.mode === "locked"
         ? "LOCKED"
-        : "READINGâ€¦";
+        : "READING…";
 
   const modeDetail = isDemo
-    ? "Open access â€” not private"
+    ? "Open access — not private"
     : isAuthenticated
       ? "Cases are scoped to your account"
       : status?.mode === "locked"
@@ -140,14 +140,21 @@ export function AppSidebar({ ...props }) {
       <SidebarHeader>
         <SidebarMenu>
           <SidebarMenuItem>
+            {/*
+              Dashboard 01's brand row: `p-1.5!` on the menu button, an icon
+              well, then `text-base font-semibold` for the name. The colours
+              come from the sidebar tokens rather than hard-coded slate, because
+              the base-nova sidebar is a light surface — a `text-white` product
+              name would be invisible on it.
+            */}
             <SidebarMenuButton
-              className="h-11 p-1.5! hover:bg-slate-800/70"
+              className="data-[slot=sidebar-menu-button]:h-11 data-[slot=sidebar-menu-button]:p-1.5!"
               render={<Link to="/app" />}
             >
-              <span className="flex size-7 items-center justify-center rounded-md bg-blue-500 text-xs font-bold text-white">
+              <span className="flex size-7 items-center justify-center rounded-md bg-primary text-xs font-bold text-primary-foreground">
                 BT
               </span>
-              <span className="text-base font-bold tracking-tight text-white">
+              <span className="text-base font-semibold tracking-tight">
                 BlockTrace
               </span>
             </SidebarMenuButton>
@@ -156,14 +163,14 @@ export function AppSidebar({ ...props }) {
       </SidebarHeader>
 
       <SidebarContent>
-        <div className="px-3 pb-2 pt-3 text-[10px] font-semibold tracking-[0.16em] text-slate-500">
-          INVESTIGATION
+        <div className="px-2 pb-2 pt-3 text-xs font-medium text-muted-foreground">
+          Investigation
         </div>
 
         <NavMain items={data.navMain} />
 
-        <div className="px-3 pb-2 pt-5 text-[10px] font-semibold tracking-[0.16em] text-slate-500">
-          INTELLIGENCE
+        <div className="px-2 pb-2 pt-5 text-xs font-medium text-muted-foreground">
+          Intelligence
         </div>
 
         <NavDocuments items={data.documents} />
@@ -172,15 +179,15 @@ export function AppSidebar({ ...props }) {
       </SidebarContent>
 
       <SidebarFooter>
-        <div className="mx-2 mb-2 rounded-lg border border-slate-800 bg-slate-900/70 p-3">
+        <div className="mx-2 mb-2 rounded-lg border border-border bg-muted/50 p-3">
           <div className="flex items-center gap-2">
             {/* A dot here would imply a heartbeat. The label states a fact about
                 the deployment, and the chain list below is fetched live. */}
-            <span className="text-[10px] font-semibold tracking-[0.16em] text-slate-400">
+            <span className="text-[10px] font-semibold tracking-[0.16em] text-foreground">
               {modeLabel}
             </span>
           </div>
-          <p className="mt-1 text-[10px] text-slate-500">{modeDetail}</p>
+          <p className="mt-1 text-[10px] text-muted-foreground">{modeDetail}</p>
           <ChainStrip />
         </div>
 

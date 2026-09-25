@@ -49,7 +49,8 @@ export function ChartAreaInteractive({
   series,
   labels = {},
   title = "Investigations over time",
-  caption = "Showing the last 3 months",
+  caption = "Total for the last 3 months",
+  captionShort = "Last 3 months",
   emptyMessage = "No data for this period.",
 }) {
   const isMobile = useIsMobile()
@@ -100,7 +101,7 @@ export function ChartAreaInteractive({
           <span className="hidden @[540px]/card:block">
             {caption}
           </span>
-          <span className="@[540px]/card:hidden">{caption}</span>
+          <span className="@[540px]/card:hidden">{captionShort || caption}</span>
         </CardDescription>
         <CardAction>
           <ToggleGroup

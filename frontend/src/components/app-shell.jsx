@@ -75,7 +75,17 @@ export function AppShell() {
   return (
     <SidebarProvider>
       <AppSidebar />
-      <SidebarInset>
+      {/*
+        `@container/main` is what the Dashboard 01 components' container
+        queries measure. `section-cards.jsx` and `data-table.jsx` size
+        themselves with `@xl/main:` and `@5xl/main:`, but `ui/sidebar.jsx`
+        renders `SidebarInset` as a bare `<main>` with no container type, so
+        those queries never match and the stat row stays one column at every
+        width. Declaring the container here — in BlockTrace's own shell, not in
+        the shared primitive — is what makes the block's responsive behaviour
+        work as designed.
+      */}
+      <SidebarInset className="@container/main">
         <AccessBanner />
         <OfflineBanner />
         <SiteHeader />
