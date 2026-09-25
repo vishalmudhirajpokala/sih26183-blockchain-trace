@@ -839,6 +839,40 @@ class TronAdapter(ChainAdapter):
     # entity intelligence
     # --------------------------------------------------------
 
+    def probe_activity(self, address: str, client: HttpClient) -> Dict[str, Any]:
+        """
+        Has this address ever moved anything on TRON?
+
+        TRON addresses are Base58Check and version-tagged, so they are already
+        unambiguous and this is not normally needed to resolve a chain. It
+        exists so every adapter answers the same question the same way, rather
+        than leaving TRON as a silent unknown if it is ever probed.
+
+        A single TronGrid call with `limit=1` is enough: one row means the
+        address has moved a token. A missing key is reported as `unavailable`,
+        never as an absence of activity.
+        """
+        chain = self.chain.value
+        result = self._trongrid_get(
+            client,
+            f"https://api.trongrid.io/v1/accounts/{address}/transactions/trc20",
+            {"limit": 1},
+        )
+        if result is None or not getattr(result, "ok", False):
+            status = "no_activity" if getattr(result, "status_code", None) == 404 else "unavailable"
+            return {"chain": chain, "status": status, "detail": None}
+
+        payload = result.data
+        rows = payload.get("data") if isinstance(payload, dict) else None
+        if not isinstance(rows, list):
+            return {"chain": chain, "status": "unavailable", "detail": None}
+
+        return {
+            "chain": chain,
+            "status": "activity" if rows else "no_activity",
+            "detail": "reported by TronGrid",
+        }
+
     def get_address_label(
         self, address: str, client: HttpClient,
     ) -> Optional[EntityAttribution]:

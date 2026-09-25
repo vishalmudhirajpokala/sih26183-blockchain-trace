@@ -702,6 +702,99 @@ class EVMAdapter(ChainAdapter):
     # entity intelligence
     # --------------------------------------------------------
 
+    def probe_activity(self, address: str, client: HttpClient) -> Dict[str, Any]:
+        """
+        Has this address ever been used on *this* EVM network?
+
+        A 0x address is valid on Ethereum, BSC and Polygon simultaneously, so
+        the format proves nothing and the only way to resolve it is to ask each
+        network's own indexer. This is one cheap request per chain.
+
+        Blockscout's `/addresses/{address}` answers 200 for an address it has
+        seen and 404 for one it has not, so the 404 is a genuine negative. The
+        200 body carries boolean evidence flags rather than counters -- there is
+        no `tx_count` on this endpoint -- so activity is read from those.
+
+        If the body does not contain a single one of the fields below, the shape
+        is not one this code understands, and the answer is `unavailable`. That
+        matters more than it looks: reading absent fields as zeroes once made a
+        heavily used address look like an empty chain, which is precisely the
+        false all-clear that must never happen.
+        """
+        chain = self.chain.value
+
+        if self.config.blockscout_base:
+            result = self._blockscout(client, f"/addresses/{address}")
+            if result is None:
+                return {"chain": chain, "status": "unavailable", "detail": None}
+            if not result.ok:
+                # 404 here means the indexer has never heard of the address,
+                # which is a real negative rather than an outage.
+                status = "no_activity" if result.status_code == 404 else "unavailable"
+                return {"chain": chain, "status": status, "detail": None}
+
+            payload = result.data
+            if not isinstance(payload, dict):
+                return {"chain": chain, "status": "unavailable", "detail": None}
+
+            signals = (
+                "has_token_transfers",
+                "has_tokens",
+                "has_logs",
+                "is_contract",
+                "coin_balance",
+            )
+            if not any(k in payload for k in signals):
+                return {
+                    "chain": chain,
+                    "status": "unavailable",
+                    "detail": "indexer response shape not recognised",
+                }
+
+            token_transfers = bool(payload.get("has_token_transfers"))
+            holds_tokens = bool(payload.get("has_tokens"))
+            is_contract = bool(payload.get("is_contract"))
+            balance = _int(payload.get("coin_balance")) or 0
+            activity = token_transfers or holds_tokens or is_contract or balance > 0
+
+            reasons = []
+            if token_transfers:
+                reasons.append("token transfers")
+            if holds_tokens:
+                reasons.append("token holdings")
+            if is_contract:
+                reasons.append("contract")
+            if balance > 0:
+                reasons.append("native balance")
+
+            return {
+                "chain": chain,
+                "status": "activity" if activity else "no_activity",
+                "detail": ("Blockscout reports " + ", ".join(reasons)) if reasons else "no activity reported by Blockscout",
+            }
+
+        result = self._etherscan(client, "txlist", {"startblock": 0, "endblock": 99999999, "page": 1, "offset": 1, "sort": "desc"})
+        if result is None:
+            return {
+                "chain": chain,
+                "status": "unavailable",
+                "detail": "no indexer configured for this network",
+            }
+        if not result.ok:
+            status = "no_activity" if result.status_code == 404 else "unavailable"
+            return {"chain": chain, "status": status, "detail": None}
+
+        payload = result.data
+        rows = payload if isinstance(payload, list) else (payload or {}).get("result")
+        if not isinstance(rows, list):
+            return {"chain": chain, "status": "unavailable", "detail": None}
+
+        return {
+            "chain": chain,
+            "status": "activity" if rows else "no_activity",
+            "detail": "reported by Etherscan",
+        }
+
     def get_address_label(
         self, address: str, client: HttpClient,
     ) -> Optional[EntityAttribution]:

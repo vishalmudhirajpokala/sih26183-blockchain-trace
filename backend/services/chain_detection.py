@@ -349,6 +349,92 @@ def validate_tron_txid(txid: str) -> bool:
 
 
 # ============================================================
+# EVIDENCE-BASED CHAIN RESOLUTION
+# ============================================================
+
+
+class AmbiguousChainError(Exception):
+    """
+    More than one candidate chain has real evidence behind it.
+
+    Raised instead of picking one, because an EVM address really can exist on
+    several networks at once and those are separate subjects. The caller
+    receives the evidence so it can ask, or investigate each separately, rather
+    than being handed a guess dressed up as a detection.
+
+    `uncertain` names the chains whose providers could not be reached. They are
+    reported alongside the answer because a chain we could not check is not a
+    chain with no activity.
+    """
+
+    def __init__(self, evidence: List[dict], uncertain: List[str]) -> None:
+        self.evidence = evidence
+        self.uncertain = uncertain
+        super().__init__(
+            "Activity was found on more than one supported network."
+        )
+
+
+def resolve_chain_by_evidence(
+    candidates: List[str],
+    address: str,
+    client,
+) -> tuple:
+    """
+    Decide which chain a shared-format address belongs to, from provider data.
+
+    The format cannot answer this -- twenty bytes of hex are equally valid on
+    Ethereum, BSC and Polygon -- so each candidate's own indexer is asked
+    whether it has ever seen the address. Exactly one chain with evidence wins
+    outright. Several, and we refuse to choose: raising is the honest outcome,
+    because a silent pick would attribute one chain's transactions to another.
+
+    A provider that cannot be reached yields `unavailable`, which is reported as
+    uncertainty and never counted as a negative. That is the difference between
+    "this chain has no activity" and "this chain was not checked", and conflating
+    them is how an outage becomes a false all-clear.
+
+    Returns `(chain_slug_or_None, evidence)`. `chain` is None only when nothing
+    had evidence and nothing failed, in which case the caller should keep its
+    existing default rather than invent a resolution.
+    """
+    from models.schemas import Chain as _Chain
+    from services.chain_registry import get_adapter
+
+    evidence: List[dict] = []
+    with_activity: List[str] = []
+    uncertain: List[str] = []
+
+    for slug in candidates:
+        try:
+            adapter = get_adapter(_Chain(slug))
+        except (KeyError, ValueError):
+            continue
+
+        try:
+            outcome = adapter.probe_activity(address, client)
+        except Exception:
+            # A probe that raises is an unknown, not a negative.
+            outcome = {"chain": slug, "status": "unavailable", "detail": None}
+
+        status = (outcome or {}).get("status", "unavailable")
+        evidence.append({
+            "chain": slug,
+            "status": status,
+            "detail": (outcome or {}).get("detail"),
+        })
+        if status == "activity":
+            with_activity.append(slug)
+        elif status != "no_activity":
+            uncertain.append(slug)
+
+    if len(with_activity) == 1:
+        return with_activity[0], evidence
+    if len(with_activity) > 1:
+        raise AmbiguousChainError(evidence, uncertain)
+    return None, evidence
+
+
 # DETECTION
 # ============================================================
 
@@ -358,10 +444,15 @@ def detect_chain(raw_input: str, preferred_evm: Optional[Chain] = None) -> dict:
     Identify a user input.
 
     Returns a dict describing what the input is. When a 0x address is given the
-    chain is genuinely ambiguous — one address format spans three networks —
-    so `preferred_evm` decides, defaulting to Ethereum, and the caller can
-    re-ask. `ambiguous` is set so the UI can prompt rather than silently
-    guessing.
+    format alone is genuinely ambiguous — one address format spans three
+    networks — so this stays a purely local, format-level answer and
+    `ambiguous` marks it.
+
+    The ambiguity is resolved from provider evidence by
+    `resolve_chain_by_evidence` when a trace actually starts, not here: this
+    function runs on a debounce behind every keystroke, and asking three
+    indexers that often would hammer rate-limited providers for a result the
+    user may never use.
     """
     result = {
         "chain": None,

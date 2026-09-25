@@ -162,6 +162,40 @@ class ChainAdapter(abc.ABC):
         return None
 
     # --------------------------------------------------------
+    # chain resolution
+    # --------------------------------------------------------
+
+    def probe_activity(self, address: str, client: HttpClient) -> Dict[str, Any]:
+        """
+        Does this chain's provider know this address, and has it ever been used?
+
+        This exists for one problem: an EVM address is twenty bytes of hex and
+        is therefore simultaneously a plausible Ethereum, BSC and Polygon
+        address, so the *format* cannot say which network it belongs to. Asking
+        each candidate's provider is the only honest way to find out, and a
+        provider lookup is cheap next to a trace.
+
+        Implementations must return exactly one of three statuses, and the
+        distinction between the last two is the whole point:
+
+            "activity"    the provider answered and this address has been used
+            "no_activity" the provider answered and this address has never
+                           been seen -- a real negative, not a failure
+            "unavailable" the provider could not be reached or did not answer
+                           -- an unknown, which must never be reported as a
+                           negative, or a chain outage would silently look
+                           like an empty chain
+
+        `unsupported` is the default for a chain whose providers offer no cheap
+        existence check. It is treated as unknown, never as a negative.
+
+        Keep this to a single cheap request. It runs on a path the user
+        triggered, not on every keystroke, but it is still one call per
+        candidate network and providers are rate limited.
+        """
+        return {"chain": self.chain.value, "status": "unsupported", "detail": None}
+
+    # --------------------------------------------------------
     # tracing
     # --------------------------------------------------------
 

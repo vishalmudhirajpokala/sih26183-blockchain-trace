@@ -393,6 +393,37 @@ class BitcoinAdapter(ChainAdapter):
             "average_block_time_basis": "protocol target (10 min), not a live measurement",
         }
 
+    def probe_activity(self, address: str, client: HttpClient) -> Dict[str, Any]:
+        """
+        Has this address ever spent or received on Bitcoin?
+
+        Esplora's `/address/{addr}` returns `chain_stats`, whose funded and
+        spent totals are a direct measurement. One request, keyless, and the
+        same call shape already used for labels below.
+        """
+        chain = self.chain.value
+        result = self._get(client, f"/address/{address}")
+        if result is None or not getattr(result, "ok", False):
+            status = "no_activity" if getattr(result, "status_code", None) == 404 else "unavailable"
+            return {"chain": chain, "status": status, "detail": None}
+
+        payload = result.data
+        if not isinstance(payload, dict):
+            return {"chain": chain, "status": "unavailable", "detail": None}
+
+        stats = payload.get("chain_stats")
+        if not isinstance(stats, dict):
+            return {"chain": chain, "status": "unavailable", "detail": None}
+
+        funded = int(stats.get("funded_txo_sum") or 0)
+        spent = int(stats.get("spent_txo_sum") or 0)
+        total = funded + spent
+        return {
+            "chain": chain,
+            "status": "activity" if total > 0 else "no_activity",
+            "detail": f"{total} transaction(s) reported by Esplora",
+        }
+
     def get_address_label(
         self, address: str, client: HttpClient,
     ) -> Optional[EntityAttribution]:

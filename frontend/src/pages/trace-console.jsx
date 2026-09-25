@@ -28,7 +28,7 @@ import {
   Loader2Icon,
   PlayIcon,
   RotateCcwIcon,
-  TriangleAlertIcon,
+  InfoIcon,
 } from "lucide-react";
 
 import {
@@ -132,24 +132,26 @@ function DetectionCard({ detection, checking, onPickChain }) {
     <div
       className={`rounded-md border px-3 py-2.5 text-xs ${
         ambiguous
-          ? "border-amber-300 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/40"
+          ? "border-sky-200 bg-sky-50 dark:border-sky-900 dark:bg-sky-950/40"
           : "border-emerald-200 bg-emerald-50 dark:border-emerald-900 dark:bg-emerald-950/40"
       }`}
     >
       <div className="flex flex-wrap items-center gap-2">
         {ambiguous ? (
-          <TriangleAlertIcon className="size-3.5 text-amber-700 dark:text-amber-300" />
+          <InfoIcon className="size-3.5 text-sky-700 dark:text-sky-300" />
         ) : (
           <CircleCheckIcon className="size-3.5 text-emerald-700 dark:text-emerald-300" />
         )}
         <span
           className={`font-semibold ${
             ambiguous
-              ? "text-amber-900 dark:text-amber-200"
+              ? "text-sky-900 dark:text-sky-200"
               : "text-emerald-900 dark:text-emerald-200"
           }`}
         >
-          {ambiguous ? "Valid on more than one chain" : `Detected on ${chain_name || chainLabel(chain)}`}
+          {ambiguous
+            ? "EVM address — network not yet known"
+            : `Detected on ${chain_name || chainLabel(chain)}`}
         </span>
         {input_type ? (
           <span className="rounded bg-white/70 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground dark:bg-black/20">
@@ -166,34 +168,32 @@ function DetectionCard({ detection, checking, onPickChain }) {
             {network}
           </span>
         ) : null}
-        {typeof detection.confidence === "number" ? (
+        {typeof detection.confidence === "number" && !ambiguous ? (
           <span className="ml-auto text-[10px] text-muted-foreground">
             format confidence {detection.confidence}%
           </span>
         ) : null}
       </div>
 
+      {/*
+        An EVM address is twenty bytes of hex and is therefore valid on
+        Ethereum, BSC and Polygon simultaneously, so the *format* genuinely
+        cannot name the network. That used to be a blocking amber warning that
+        made the user pick.
+
+        It is now a neutral note, because the format is only half the answer:
+        when the trace starts, BlockTrace asks each candidate network's own
+        indexer whether it has ever seen the address and follows the evidence.
+        One network with activity is chosen automatically and this note
+        disappears. Several is reported back as a short result chooser after
+        detection, which is a different question from "which network is this
+        valid on".
+      */}
       {ambiguous ? (
-        <div className="mt-2">
-          <p className="text-amber-800 dark:text-amber-200">
-            This input is structurally valid on more than one supported chain.
-            The same address is a different subject on each, so BlockTrace will
-            not choose for you — these are separate investigations with separate
-            answers.
-          </p>
-          <div className="mt-2 flex flex-wrap gap-1.5">
-            {candidates.map((c) => (
-              <Button
-                key={c}
-                size="sm"
-                variant={chain === c ? "default" : "outline"}
-                onClick={() => onPickChain(c)}
-              >
-                {chainLabel(c)}
-              </Button>
-            ))}
-          </div>
-        </div>
+        <p className="mt-2 text-sky-800 dark:text-sky-200">
+          BlockTrace will work out which network this belongs to by checking
+          each one for activity when you trace it.
+        </p>
       ) : null}
 
       {note ? <p className="mt-1.5 text-muted-foreground">{note}</p> : null}
@@ -209,7 +209,7 @@ function DetectionCard({ detection, checking, onPickChain }) {
  * here. These exist for an investigator who needs a wider or tighter run than
  * the default; nobody should have to open them to trace a wallet.
  */
-function AdvancedOptions({ options, setOptions, disabled, recommended }) {
+function AdvancedOptions({ options, setOptions, disabled, recommended, chain, setChain }) {
   const fields = [
     {
       key: "max_depth",
@@ -243,6 +243,31 @@ function AdvancedOptions({ options, setOptions, disabled, recommended }) {
 
   return (
     <div className="grid gap-3 sm:grid-cols-2">
+      <div className="space-y-1.5">
+        <Label htmlFor="chain" className="text-xs">
+          Network override
+        </Label>
+        {/* `null` is Base UI's "no value chosen" state. An empty string would
+            be a value no item has, which renders as a selection that does not
+            exist. Leaving it unset is the normal path: the backend resolves the
+            network from provider evidence. */}
+        <Select value={chain || null} onValueChange={(v) => setChain(v ?? "")}>
+          <SelectTrigger id="chain" className="w-full">
+            <SelectValue placeholder="Detect automatically" />
+          </SelectTrigger>
+          <SelectContent>
+            {CHAIN_ORDER.map((c) => (
+              <SelectItem key={c} value={c}>
+                {chainLabel(c)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <p className="text-[10px] leading-4 text-muted-foreground">
+          Normally BlockTrace works this out from which network has activity.
+          Pin it only to force a specific network.
+        </p>
+      </div>
       {fields.map((f) => {
         const suggested = recommended?.[f.key];
         return (
@@ -438,6 +463,7 @@ export default function TraceConsole() {
   const [error, setError] = useState(null);
   const [response, setResponse] = useState(null);
   const [recommended, setRecommended] = useState(null);
+  const [multiChain, setMultiChain] = useState(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   // A ref, not state: the abort controller must be readable from the cleanup of
@@ -514,18 +540,18 @@ export default function TraceConsole() {
   }, [query, chain, setSearchParams]);
 
   // -- run ---------------------------------------------------------------
-  const ambiguous = Boolean(detection?.ambiguous);
   /*
-   * Three reasons not to run: nothing worth sending, a network the detector
-   * could not resolve, and an input the detector has already rejected.
+   * Chain ambiguity is no longer a reason to stop. A 0x address is valid on
+   * three networks, but the backend resolves that from provider evidence when
+   * the trace runs, so the console's only job here is to refuse input the
+   * format detector has already rejected, and to avoid firing two overlapping
+   * investigations when the user clicks twice.
    *
-   * The third only applies once detection has actually answered
-   * (`detection?.valid === false`), so an in-flight or absent check never
-   * blocks someone who pasted something valid. Letting an unrecognised input
-   * through would only earn a 400 from the backend.
+   * The check keys on detection.valid === false, so an in-flight or absent
+   * check never blocks a valid paste.
    */
   const rejected = detection?.valid === false;
-  const canRun = Boolean(query.trim().length >= 8) && !ambiguous && !rejected && !running;
+  const canRun = Boolean(query.trim().length >= 8) && !rejected && !running;
 
   async function handleRun(event) {
     event.preventDefault();
@@ -556,6 +582,7 @@ export default function TraceConsole() {
 
       const result = await api.runTrace(body);
       setResponse(result);
+      setMultiChain(null);
 
       const status = result.result?.status;
       if (status === "provider_error" || status === "rate_limited" || status === "timeout") {
@@ -571,6 +598,25 @@ export default function TraceConsole() {
         });
       }
     } catch (err) {
+      /*
+       * `ambiguous_chain` is not a failure. The backend found real activity on
+       * more than one network for an address that is valid on all of them, and
+       * refused to pick one because each is a separate subject. That becomes a
+       * short chooser here, offered *after* detection rather than as a warning
+       * in front of it, and the evidence travels with it so the choice is
+       * informed rather than a guess.
+       */
+      if (err?.error === "ambiguous_chain") {
+        const detail = err.detection || {};
+        setMultiChain({
+          chains: detail.candidates_with_activity || [],
+          uncertain: detail.uncertain || [],
+          evidence: detail.evidence || [],
+        });
+        setError(null);
+        setResponse(null);
+        return;
+      }
       setError(err);
       setResponse(null);
       toast.error("The trace did not complete", { description: err.message });
@@ -596,7 +642,7 @@ export default function TraceConsole() {
         description="Paste an address or a transaction hash. BlockTrace works out which network it belongs to, follows the money through the providers, and records what it could and could not confirm."
       />
 
-      <form onSubmit={handleRun} className="space-y-4">
+      <form id="trace-form" onSubmit={handleRun} className="space-y-4">
         <SectionCard bodyClassName="space-y-4">
           <div className="space-y-2">
             <Label htmlFor="query">Address or transaction hash</Label>
@@ -633,34 +679,11 @@ export default function TraceConsole() {
           />
 
           {/*
-            The chain is detected, not chosen. The only time a person has to
-            pick is when the input is genuinely valid on several chains -- a
-            0x-prefixed address is legal on Ethereum, BSC and Polygon at once --
-            because those are three different investigations. `preferred_chain`
-            is still sent when it is set, so pinning remains possible.
+            No chain selector in the normal flow. The backend decides the
+            network from provider evidence, and an analyst who needs to pin one
+            can still do it under Advanced options, which is where a network
+            override belongs.
           */}
-          {ambiguous ? (
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div className="space-y-1.5">
-                <Label htmlFor="chain">Network</Label>
-                <Select value={chain || null} onValueChange={(v) => setChain(v ?? "")}>
-                  <SelectTrigger id="chain" className="w-full">
-                    <SelectValue placeholder="Choose a network" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {CHAIN_ORDER.map((c) => (
-                      <SelectItem key={c} value={c}>
-                        {chainLabel(c)}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <p className="text-[10px] leading-4 text-muted-foreground">
-                  BlockTrace could not tell which network this belongs to.
-                </p>
-              </div>
-            </div>
-          ) : null}
 
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
@@ -716,6 +739,8 @@ export default function TraceConsole() {
                 setOptions={setOptions}
                 disabled={running}
                 recommended={recommended}
+                chain={chain}
+                setChain={setChain}
               />
               <p className="mt-3 text-[10px] leading-4 text-muted-foreground">
                 Leave these blank and BlockTrace picks a safe budget for you.
@@ -726,15 +751,52 @@ export default function TraceConsole() {
             </div>
           ) : null}
 
-          {ambiguous ? (
-            <p className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
-              Choose which chain to investigate before running. The same
-              address on Ethereum, BSC and Polygon is three different
-              investigations.
+        </SectionCard>
+      </form>
+
+      {/*
+        More than one network has real activity for this address. Each is a
+        separate subject, so they are offered as separate investigations rather
+        than merged into one cross-chain picture that no provider supports.
+        A network whose provider could not be reached is named separately: it
+        is unknown, not empty, and hiding that would let an outage read as a
+        clean network.
+      */}
+      {multiChain ? (
+        <SectionCard
+          title="Activity found on more than one network"
+          description="This address is valid on several EVM networks and more than one of them has used it. Each network below is a separate investigation with its own transactions, entities and risk."
+        >
+          <div className="flex flex-wrap gap-2">
+            {multiChain.chains.map((c) => (
+              <Button
+                key={c}
+                size="sm"
+                onClick={() => {
+                  setChain(c);
+                  setMultiChain(null);
+                  // Re-run pinned to the chosen network.
+                  window.requestAnimationFrame(() => {
+                    const form = document.getElementById("trace-form");
+                    if (form) form.requestSubmit();
+                  });
+                }}
+              >
+                Investigate {chainLabel(c)}
+              </Button>
+            ))}
+          </div>
+
+          {multiChain.uncertain.length > 0 ? (
+            <p className="mt-3 text-xs text-muted-foreground">
+              Could not check{" "}
+              {multiChain.uncertain.map((c) => chainLabel(c)).join(", ")} — that
+              provider did not answer. Absence of activity there is unknown, not
+              confirmed.
             </p>
           ) : null}
         </SectionCard>
-      </form>
+      ) : null}
 
       {error ? <ErrorPanel error={error} onRetry={handleRun} /> : null}
 

@@ -25,6 +25,7 @@ from models.schemas import Chain, TraceStatus
 from services.auth import AuthState, resolve_identity
 from services.report_service import render_trace_report, report_filename_for
 from services.repository import get_repository
+from services.chain_detection import AmbiguousChainError
 from services.trace_orchestrator import DetectionError, detect_only, run_investigation
 
 #: The multi-chain trace lives at `POST /trace/run` rather than at
@@ -124,6 +125,7 @@ def detect(body: DetectRequestBody) -> DetectResponse:
     responses={
         400: {"model": ErrorResponse},
         401: {"model": ErrorResponse},
+        409: {"model": ErrorResponse},
         502: {"model": ErrorResponse},
     },
     summary="Run a multi-chain fund-flow investigation",
@@ -159,6 +161,29 @@ def create_trace(
                 "detail": str(exc),
                 "kind": "invalid_input",
                 "detection": exc.detection,
+            },
+        )
+    except AmbiguousChainError as exc:
+        # More than one network has real activity for this address. This is not
+        # a failure and not a question about blockchain infrastructure: those
+        # are genuinely different subjects, so the evidence comes back and the
+        # caller decides which to investigate. Nothing is guessed.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "ambiguous_chain",
+                "detail": (
+                    "Activity for this address was found on more than one "
+                    "network. Each is a separate investigation."
+                ),
+                "kind": "ambiguous_chain",
+                "detection": {
+                    "candidates_with_activity": [
+                        e["chain"] for e in exc.evidence if e.get("status") == "activity"
+                    ],
+                    "uncertain": exc.uncertain,
+                    "evidence": exc.evidence,
+                },
             },
         )
     except TimeoutError as exc:

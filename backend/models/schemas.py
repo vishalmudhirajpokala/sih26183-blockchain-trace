@@ -543,6 +543,12 @@ class TraceMetadata:
     provider_usage: List[ProviderUsage] = field(default_factory=list)
     truncated: bool = False
     truncation_reasons: List[str] = field(default_factory=list)
+    # Present only when the input was valid on more than one network and the
+    # chain was settled by asking each network's indexer. It records what was
+    # asked and what came back, so "this is an Ethereum address" is never shown
+    # as though the address format had proved it, and a network that could not
+    # be checked is visible as uncertain rather than empty.
+    chain_resolution: Optional[dict] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -558,6 +564,7 @@ class TraceMetadata:
             "provider_usage": [p.to_dict() for p in self.provider_usage],
             "truncated": self.truncated,
             "truncation_reasons": self.truncation_reasons,
+            "chain_resolution": self.chain_resolution,
         }
 
     @classmethod
@@ -576,6 +583,7 @@ class TraceMetadata:
             provider_usage=[ProviderUsage.from_dict(p) for p in (data.get("provider_usage") or [])],
             truncated=bool(data.get("truncated")),
             truncation_reasons=list(data.get("truncation_reasons") or []),
+            chain_resolution=data.get("chain_resolution"),
         )
 
 

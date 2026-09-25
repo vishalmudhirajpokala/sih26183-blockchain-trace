@@ -34,7 +34,7 @@ from models.schemas import (
     TraceStatus,
 )
 from services import risk_engine
-from services.chain_detection import detect_chain
+from services.chain_detection import detect_chain, resolve_chain_by_evidence
 from services.chain_registry import get_adapter
 from utils.http_client import HttpClient, RequestCache
 
@@ -108,7 +108,27 @@ def run_investigation(
     tx_cap = MAX_TXS_PER_NODE if max_txs_per_node is None else max_txs_per_node
 
     # --- 1. detect -------------------------------------------------------
-    chain, input_type, normalized = _resolve_input(raw_input, preferred_chain)
+    #
+    # A 0x address is valid on Ethereum, BSC and Polygon at once, so the format
+    # cannot name the network. Rather than defaulting to Ethereum, ask each
+    # candidate's own indexer whether it has ever seen the address. That is one
+    # cheap call per candidate, made once, on a request the user explicitly
+    # started -- not on the debounced keystroke detection above.
+    detection = detect_only(raw_input, preferred_chain)
+    resolved: Optional[Chain] = None
+    chain_evidence: List[dict] = []
+    if detection.get("ambiguous") and preferred_chain is None and detection.get("candidates"):
+        resolver_client = HttpClient(
+            cache=RequestCache(),
+            deadline=deadline_monotonic,
+        )
+        resolved, chain_evidence = resolve_chain_by_evidence(
+            detection["candidates"], detection["normalized_input"], resolver_client,
+        )
+
+    chain, input_type, normalized = _resolve_input(
+        raw_input, preferred_chain or resolved,
+    )
     adapter = get_adapter(chain)
 
     # --- 2. validate against the chosen adapter --------------------------
@@ -188,6 +208,23 @@ def run_investigation(
 
     # --- 6. metadata -----------------------------------------------------
     completed = time.time()
+
+    # How the chain was settled, recorded on the result so the console can say
+    # so rather than presenting a resolved chain as if the format had named it.
+    # A network whose provider could not be reached is listed as uncertain, not
+    # silently treated as having no activity.
+    chain_resolution = None
+    if chain_evidence:
+        chain_resolution = {
+            "method": "provider_evidence",
+            "resolved": chain.value,
+            "candidates": detection.get("candidates") or [],
+            "evidence": chain_evidence,
+            "uncertain": [
+                e["chain"] for e in chain_evidence if e.get("status") not in ("activity", "no_activity")
+            ],
+        }
+
     result.metadata = TraceMetadata(
         started_at=started,
         completed_at=completed,
@@ -200,6 +237,7 @@ def run_investigation(
         provider_usage=usage,
         truncated=adapter_trace.truncated,
         truncation_reasons=adapter_trace.truncation_reasons,
+        chain_resolution=chain_resolution,
     )
 
     return result
