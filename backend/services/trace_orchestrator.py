@@ -236,7 +236,23 @@ def run_investigation(
         transactions_inspected=adapter_trace.transactions_inspected,
         provider_usage=usage,
         truncated=adapter_trace.truncated,
-        truncation_reasons=adapter_trace.truncation_reasons,
+        # Deduped, order preserved.
+        #
+        # The adapters append a reason inside the traversal loop, once per node
+        # that hits a boundary, so a run that stops at the node ceiling on 25
+        # nodes produced fifteen entries of which three were byte-identical:
+        #
+        #   max_nodes (25) reached; 5 candidate address(es) not examined
+        #   max_nodes (25) reached; 5 candidate address(es) not examined
+        #   max_nodes (25) reached; 5 candidate address(es) not examined
+        #
+        # A repeated identical string carries no more information than the one
+        # copy, and the UI renders this list verbatim, so the repetition became
+        # a wall of near-duplicate text. Only exact duplicates are collapsed;
+        # genuinely distinct reasons -- notably `max_depth (N) reached at <addr>`,
+        # which names a different address each time -- are all kept, so no
+        # boundary and no address is dropped.
+        truncation_reasons=list(dict.fromkeys(adapter_trace.truncation_reasons)),
         chain_resolution=chain_resolution,
     )
 

@@ -756,10 +756,6 @@ export default function FundFlow3D({
         <span className="font-semibold text-blue-400">
           {seed ? `SUBJECT ${String(seed).slice(0, 8).toUpperCase()}…` : "NO SUBJECT SET"}
         </span>
-
-        <span className="hidden text-slate-600 sm:inline">
-          Drag to rotate · Scroll to zoom
-        </span>
       </div>
     </div>
   );

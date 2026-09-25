@@ -121,16 +121,33 @@ const STATUS = {
       "Narrowing the depth usually resolves this.",
   },
   partial: {
-    short: "Partial",
+    /*
+     * "Limited scope", not "Partial" and not a warning.
+     *
+     * This status means the trace stopped at a configured investigation
+     * boundary -- usually the node ceiling on a busy address -- and is not a
+     * failure. A run that explored 48 addresses and 66 transfers before
+     * reaching the ceiling has produced a substantial, usable result, and
+     * labelling it "PARTIAL" in large type made a good investigation read as a
+     * broken one.
+     *
+     * The honesty is preserved rather than softened: `meaning` still says the
+     * result covers only what was examined, and the exact boundary and the
+     * addresses that hit it stay available under "Why limited?".
+     */
+    short: "Limited scope",
     tone: "caution",
     meaning:
-      "Some hops resolved and some failed. What is shown is the part that was " +
-      "established; the rest is not known.",
+      "The investigation stopped at its configured scope boundary, so the " +
+      "results cover only the addresses actually examined. Activity may " +
+      "continue beyond that boundary.",
   },
   depth_exceeded: {
-    short: "Depth exceeded",
+    short: "Limited scope",
     tone: "caution",
-    meaning: "The trace stopped at the depth limit, so the flow may continue beyond it.",
+    meaning:
+      "The trace reached the configured depth limit, so the fund flow may " +
+      "continue beyond it.",
   },
   unknown: {
     short: "Unknown",

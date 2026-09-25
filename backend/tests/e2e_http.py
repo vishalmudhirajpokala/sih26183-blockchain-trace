@@ -104,7 +104,26 @@ def offline_checks(client: TestClient) -> list:
 
 
 def live_trace_check(client: TestClient) -> list:
-    """One real investigation, asserting internal consistency only."""
+    """One real investigation, asserting internal consistency only.
+
+    NOTE ON THE LIMITS BELOW. `max_depth: 1, max_nodes: 5` is deliberate -- this
+    is a live test against real providers and a full-scope trace would take
+    minutes. It is emphatically NOT the product default, which is
+    `MAX_TRACE_DEPTH=3 / MAX_TRACE_NODES=25` resolved in the orchestrator when
+    the request omits them.
+
+    That distinction matters because this test used to leave its own caps behind:
+    `save` defaults to true, so every run appended an investigation to the real
+    store whose `metadata` recorded `depth_limit: 1`, `node_limit: 5`. The
+    history page then presented a test artefact as a real case, showing
+    "Limited scope -- max depth 1" and inviting the reader to conclude the
+    product truncates ordinary traces at one hop. It does not; a trace with no
+    limits in the request resolves to 3/25 and reaches ~48 nodes.
+
+    So the row is deleted again at the end of this function. Persistence is still
+    genuinely exercised -- create, read back, and delete are all asserted -- but
+    the test no longer leaves residue in the store a user browses.
+    """
     failures = []
     r = client.post("/trace/run", json={"query": LIVE_TRON, "max_depth": 1, "max_nodes": 5})
     if r.status_code != 200:
@@ -161,6 +180,23 @@ def live_trace_check(client: TestClient) -> list:
         r3 = client.get(f"/investigations/{inv_id}")
         if r3.status_code != 200:
             failures.append(f"saved investigation {inv_id} not readable: {r3.status_code}")
+
+        # ...and then removed again. See the note on this function: a live test
+        # with deliberately tiny caps must not leave a row in the store that a
+        # user will later read as a real, depth-1 investigation.
+        r4 = client.delete(f"/investigations/{inv_id}")
+        if r4.status_code not in (200, 204):
+            failures.append(
+                f"cleanup of test investigation {inv_id} failed with {r4.status_code}; "
+                "it is left in the store with this test's depth/nodes caps"
+            )
+        else:
+            r5 = client.get(f"/investigations/{inv_id}")
+            if r5.status_code != 404:
+                failures.append(
+                    f"test investigation {inv_id} still readable after delete "
+                    f"({r5.status_code})"
+                )
 
     return failures
 

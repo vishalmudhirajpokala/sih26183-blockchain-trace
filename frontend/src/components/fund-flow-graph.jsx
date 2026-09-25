@@ -381,7 +381,7 @@ function Graph2D({ nodes, edges, onSelect }) {
           viewBox={`0 0 ${VIEW_W} ${VIEW_H}`}
           className="h-[clamp(420px,58vh,820px)] w-full touch-none select-none"
           role="img"
-          aria-label="Fund flow between addresses, laid out by hop distance from the subject. Drag to pan, scroll to zoom, drag a node to move it."
+          aria-label={`Fund flow between ${nodes.length} addresses and ${edges.length} transfers, laid out by hop distance from the subject. Drag to pan, scroll to zoom, drag a node to move it.`}
           onPointerDown={onBackgroundDown}
         >
         <g transform={`translate(${cam.x} ${cam.y}) scale(${cam.k})`}>
@@ -747,12 +747,20 @@ export function FundFlowGraph({
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        {/* The one place the graph states its own scale. This sentence used to
-            also be repeated in the section description above the graph and again
-            in the sentence under the legend, three times for one fact. */}
+        {/*
+          The one place the graph states its own scale, and the one place it
+          states its own controls. Both used to appear twice: the section
+          description above the graph repeated the interaction help verbatim, and
+          the SVG's aria-label carried a third copy for screen readers.
+        */}
         <p className="text-xs text-muted-foreground">
           {nodeList.length} {nodeList.length === 1 ? "address" : "addresses"} ·{" "}
-          {edgeList.length} {edgeList.length === 1 ? "transfer" : "transfers"}
+          {edgeList.length} {edgeList.length === 1 ? "transfer" : "transfers"} ·{" "}
+          <span className="hidden sm:inline">
+            {mode === "2d"
+              ? "Drag to pan · Scroll to zoom · Drag nodes to reposition"
+              : "Drag to rotate · Right-drag to pan · Scroll to zoom"}
+          </span>
         </p>
         <div className="flex gap-1.5">
           <Button

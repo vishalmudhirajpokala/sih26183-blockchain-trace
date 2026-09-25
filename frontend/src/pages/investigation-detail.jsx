@@ -18,7 +18,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { AlertTriangle, ArrowLeft, Download, FileText } from "lucide-react";
+import { ArrowLeft, Download, FileText } from "lucide-react";
 import { toast } from "sonner";
 
 import { api, reportHref } from "@/lib/api";
@@ -28,6 +28,7 @@ import {
   formatDuration,
   formatCount,
   safeSourceUrl,
+  statusInfo,
 } from "@/lib/format";
 import {
   Disclosure,
@@ -153,6 +154,30 @@ export default function InvestigationDetail() {
   // Provider-supplied, so scheme-checked before it becomes an href.
   const entitySourceUrl = safeSourceUrl(result.entity?.source_url);
 
+  /*
+   * Status vocabulary.
+   *
+   * The raw backend value is never rendered. `partial` is a perfectly good
+   * enum but "PARTIAL" in the page header reads as a broken investigation, and
+   * `provider_error` reads as a BlockTrace bug rather than an unreachable
+   * provider. `statusInfo` maps the real enum onto investigator language, and
+   * anything it does not recognise falls through to its own neutral label
+   * rather than to a guess.
+   */
+  const status = statusInfo(result.status);
+
+  /*
+   * Limited scope is shown when the engine itself recorded truncation, not when
+   * the status string happens to be `partial`. Those are different facts: an
+   * adapter can return `partial` with `truncated: false` when a hop genuinely
+   * had no data, and claiming a boundary was hit when none was would be the
+   * mirror image of the over-warning this is replacing.
+   */
+  const limitedScope = Boolean(metadata.truncated);
+  const boundaryReasons = Array.isArray(metadata.truncation_reasons)
+    ? metadata.truncation_reasons
+    : [];
+
   return (
     <div className="space-y-8 px-6 py-8">
       <PageHeader
@@ -169,13 +194,13 @@ export default function InvestigationDetail() {
             /*
               Status and chain as two compact badges. The engine's
               `status_detail` sentence used to sit here as well, but it restated
-              the partial banner immediately below in plainer words -- two
-              paragraphs saying one thing. It stays on the record, rendered in
-              full under Investigation details.
+              the scope note immediately below in plainer words -- two paragraphs
+              saying one thing. It stays on the record, rendered in full under
+              Investigation details.
             */
             <span className="flex flex-wrap items-center gap-2">
-              <Badge variant="secondary">
-                {String(result.status).toUpperCase()}
+              <Badge variant={status.tone === "negative" ? "destructive" : "secondary"}>
+                {status.short}
               </Badge>
               <Badge variant="outline">
                 {result.chain_name || chainLabel(result.chain) || result.chain}
@@ -231,50 +256,27 @@ export default function InvestigationDetail() {
       />
 
       {/*
-        A case that was cut short says so at the top, in one compact block.
+        A case that was cut short says so -- quietly.
 
-        This was three paragraphs across two containers: the engine's
-        `status_detail` sentence in the header, a headline repeating the
-        truncation reason, and a paragraph about absence not being evidence. All
-        three facts are load-bearing -- a partial result that reads as complete is
-        the most damaging way this page could mislead -- so none was dropped. They
-        are now one banner with the boundary stated once, and the engine's own
-        reason behind a toggle for anyone who needs the exact wording.
+        This used to be an amber block above the fold carrying a "PARTIAL" badge,
+        a "Boundary: max depth 1" line, a paragraph about absence not being
+        evidence, and a "Why the trace stopped" list. Four separate statements
+        that the trace reached a configured boundary, in the position of highest
+        emphasis on the page.
+
+        The boundary is real and hiding it would be dishonest, so it is still
+        stated. It is now one line of plain text under the status badge, and the
+        engine's own reasons are one keystroke away. Nothing here is a failure:
+        a run that explored 48 addresses before hitting the node ceiling produced
+        a substantial result, and the page should read that way.
       */}
-      {metadata.truncated ? (
-        <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm dark:border-amber-900 dark:bg-amber-950/40">
-          <div className="flex flex-wrap items-center gap-2">
-            <AlertTriangle
-              className="size-4 shrink-0 text-amber-600 dark:text-amber-400"
-              aria-hidden="true"
-            />
-            <p className="font-medium text-amber-900 dark:text-amber-200">
-              Partial investigation
-            </p>
-            {typeof metadata.depth_limit === "number" ? (
-              <span className="text-xs text-amber-800/80 dark:text-amber-300/80">
-                Boundary: max depth {metadata.depth_limit}
-              </span>
-            ) : null}
-          </div>
-          <p className="mt-1.5 text-xs leading-5 text-amber-900/90 dark:text-amber-200/90">
-            The trace stopped at the investigation boundary, so the results below
-            cover only the addresses actually examined. Absence of a counterparty
-            here is not evidence that the subject did not transact with one.
-          </p>
-          {Array.isArray(metadata.truncation_reasons) &&
-          metadata.truncation_reasons.length ? (
-            <details className="mt-2">
-              <summary className="cursor-pointer text-xs text-amber-800 dark:text-amber-300">
-                Why the trace stopped
-              </summary>
-              <ul className="mt-1.5 space-y-1 text-xs leading-5 text-amber-900/90 dark:text-amber-200/90">
-                {metadata.truncation_reasons.map((reason, i) => (
-                  <li key={i}>{reason}</li>
-                ))}
-              </ul>
-            </details>
-          ) : null}
+      {limitedScope ? (
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
+          <span className="font-medium text-foreground">Limited scope</span>
+          <span>
+            Results reflect the addresses examined in this run. Activity may
+            continue beyond them.
+          </span>
         </div>
       ) : null}
 
@@ -329,7 +331,7 @@ export default function InvestigationDetail() {
 
           <SectionCard
             title="Fund flow"
-            description="Fund flow between addresses. Drag to pan, scroll to zoom, drag nodes to reposition. Switch to 3D to rotate the same graph."
+            description="Value movement between addresses, laid out by hop distance from the subject."
           >
             <FundFlowGraph
               nodes={nodes}
@@ -506,9 +508,49 @@ export default function InvestigationDetail() {
         */}
         <Disclosure
           label="Technical details"
-          hint="providers consulted and engine run notes"
+          hint="investigation scope, providers consulted and engine run notes"
           bodyClassName="text-xs"
         >
+          {/*
+            Why the scope was limited. The engine names the exact boundary and,
+            for a depth limit, the address that hit it. That is implementation
+            vocabulary, so it lives here rather than in the header -- but it is
+            the evidence behind the "Limited scope" line above, and it is not
+            removed.
+          */}
+          {limitedScope ? (
+            <div className="mb-3">
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Why the scope was limited
+              </h3>
+              {boundaryReasons.length ? (
+                <ul className="mt-1.5 space-y-1 text-[11px] leading-4 text-muted-foreground">
+                  {boundaryReasons.map((reason, i) => (
+                    <li key={i} className="font-mono break-words">
+                      {reason}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="mt-1.5 text-[11px] leading-4 text-muted-foreground">
+                  The engine recorded truncation without naming a boundary.
+                </p>
+              )}
+              <p className="mt-1.5 text-[11px] leading-4 text-muted-foreground">
+                Configured for this run: max depth{" "}
+                {typeof metadata.depth_limit === "number"
+                  ? metadata.depth_limit
+                  : null}
+                , max addresses{" "}
+                {typeof metadata.node_limit === "number"
+                  ? metadata.node_limit
+                  : null}
+                . Reached depth {metadata.max_depth_reached}, examined{" "}
+                {formatCount(metadata.nodes_examined)}.
+              </p>
+            </div>
+          ) : null}
+
           <ProviderLedger usage={metadata.provider_usage} />
           <div className="mt-3">
             <EvidenceNotes notes={notes} />

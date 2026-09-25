@@ -167,7 +167,6 @@ export function RiskPanel({ risk, className = "" }) {
   return (
     <SectionCard
       title="Risk assessment"
-      description="One shared engine for every chain. The score is a summary; the indicators are the finding."
       className={className}
       bodyClassName="space-y-4"
     >
@@ -209,8 +208,13 @@ export function RiskPanel({ risk, className = "" }) {
           </div>
         </div>
 
+        {/*
+          The bar is the score drawn as a proportion. `RiskBadge` already shows
+          the number, so the bar carries no label -- "risk score" appeared twice
+          in this block, once as the badge text and once as the bar caption.
+        */}
         <div className="w-full sm:w-56">
-          <ScoreBar score={score} max={100} label="risk score" tone={tone} />
+          <ScoreBar score={score} max={100} tone={tone} />
         </div>
       </div>
 
@@ -272,6 +276,28 @@ export function RiskPanel({ risk, className = "" }) {
           </p>
         </Disclosure>
       ) : null}
+
+      {/*
+        Methodology, collapsed. "One shared engine for every chain. The score is
+        a summary; the indicators are the finding." was the card's permanent
+        description, i.e. a note about how BlockTrace is built sat above the
+        finding on every single investigation. It is true, useful, and not what
+        an investigator opens the page to read, so it is a disclosure now.
+      */}
+      <Disclosure label="Risk methodology" bodyClassName="text-xs">
+        <p className="leading-5 text-muted-foreground">
+          One shared engine scores every chain, so a score means the same thing
+          on TRON, Ethereum, BNB Smart Chain, Polygon and Bitcoin and is directly
+          comparable between them. The score is a summary of the indicators
+          below it; the indicators are the finding, and the weight each one
+          carries is the engine&apos;s own.
+        </p>
+        <p className="mt-2 leading-5 text-muted-foreground">
+          The score describes only the data the providers returned for this run.
+          It is recalculated from the stored result, never carried over from an
+          earlier trace, and it is not edited by hand.
+        </p>
+      </Disclosure>
 
       {/*
         The limits of the number, collapsed. This is the part most often left off

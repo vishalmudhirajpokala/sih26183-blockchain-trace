@@ -13,7 +13,12 @@ import { FileText, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { api } from "@/lib/api";
-import { chainLabel, formatDateTime, truncateHash } from "@/lib/format";
+import {
+  chainLabel,
+  formatDateTime,
+  statusInfo,
+  truncateHash,
+} from "@/lib/format";
 import {
   EmptyState,
   ErrorPanel,
@@ -163,8 +168,17 @@ export default function Investigations() {
                   </TableCell>
 
                   <TableCell>
-                    <span className="font-mono text-xs text-muted-foreground">
-                      {row.status || "—"}
+                    {/*
+                      The shared status vocabulary, not the raw enum. This
+                      column previously printed `partial` in monospace, which
+                      reads as an error code rather than as "this run stopped at
+                      its configured scope". The stored value is unchanged and
+                      still shown in full on the investigation's details row.
+                    */}
+                    <span className="text-xs text-muted-foreground">
+                      {row.status
+                        ? statusInfo(row.status).short
+                        : "Not available"}
                     </span>
                   </TableCell>
 
