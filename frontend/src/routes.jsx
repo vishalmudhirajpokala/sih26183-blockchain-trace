@@ -29,7 +29,14 @@ import Landing from "@/pages/landing";
  * `@react-three/fiber` is the largest dependency in the app and only the
  * investigation detail page needs it.
  */
-const Dashboard = lazy(() => import("@/pages/dashboard"));
+/*
+ * `/app` renders the imported Dashboard 01 layout (`dashboard-01.jsx`), which
+ * composes that block's `SectionCards` and `ChartAreaInteractive` against the
+ * real analytics endpoints. The previous overview page is still on disk at
+ * `pages/dashboard.jsx` and is not referenced by any route; it is kept as the
+ * fallback for the older layout.
+ */
+const Dashboard = lazy(() => import("@/pages/dashboard-01"));
 const TraceConsole = lazy(() => import("@/pages/trace-console"));
 const Investigations = lazy(() => import("@/pages/investigations"));
 const InvestigationDetail = lazy(() => import("@/pages/investigation-detail"));

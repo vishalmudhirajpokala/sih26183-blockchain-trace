@@ -1,111 +1,199 @@
-:root {
-  --text: #6b6375;
-  --text-h: #08060d;
-  --bg: #fff;
-  --border: #e5e4e7;
-  --code-bg: #f4f3ec;
-  --accent: #aa3bff;
-  --accent-bg: rgba(170, 59, 255, 0.1);
-  --accent-border: rgba(170, 59, 255, 0.5);
-  --social-bg: rgba(244, 243, 236, 0.5);
-  --shadow:
-    rgba(0, 0, 0, 0.1) 0 10px 15px -3px, rgba(0, 0, 0, 0.05) 0 4px 6px -2px;
+/*
+ * BlockTrace theme.
+ *
+ * Tailwind v4 + the shadcn token layer that the `ui/*` components and the
+ * imported Dashboard 01 components are written against. There is no
+ * `tailwind.config.js`: v4 reads its theme from here, and `components.json`
+ * already points at this file with an empty `tailwind.config`.
+ *
+ * What this replaced
+ * ------------------
+ * The previous `index.css` was the create-vite starter stylesheet, not a
+ * BlockTrace stylesheet. It pinned `#root` to `width: 1126px; text-align:
+ * center; border-inline: 1px solid` and set `h1 { font-size: 56px }`, and its
+ * only class selectors (`button-icon`, `counter`) were referenced by nothing
+ * outside the legacy `App.jsx`, which carries its own styles inline and is no
+ * longer mounted. A fixed-width root cannot host a sidebar layout at all, so
+ * those rules had to go.
+ *
+ * Two things from that file had live consumers and are kept:
+ *   - `--border` — read by `ui/sonner.jsx`; it is also a shadcn token, so the
+ *     value below satisfies both.
+ *   - `--blue-soft` — read by `pages/landing.jsx` for its header glow. It was
+ *     never actually defined (it only existed inside `App.jsx`'s inline
+ *     styles), so the gradient silently rendered transparent. Defined here
+ *     with the same value the old inline theme used.
+ *
+ * Dark mode is class-driven (`.dark`), as shadcn expects. Nothing in the app
+ * toggles it today, so the console renders light; the sidebar keeps its own
+ * explicit slate palette, which is how it is designed to look.
+ */
 
-  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --heading: system-ui, 'Segoe UI', Roboto, sans-serif;
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  /* Radius. Every `rounded-*` size is derived from this one value. */
+  --radius: 0.625rem;
+
+  /*
+   * The header height. `site-header.jsx` sets its height with the v4 variable
+   * shorthand `h-(--header-height)` and collapses it to the same value when
+   * the sidebar is collapsed, so the value has to live here.
+   */
+  --header-height: 3.5rem;
+
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
+
+  /* Recharts series colours, consumed by `ui/chart.jsx` via `chartConfig`. */
+  --chart-1: oklch(0.646 0.222 41.116);
+  --chart-2: oklch(0.6 0.118 184.704);
+  --chart-3: oklch(0.398 0.07 227.392);
+  --chart-4: oklch(0.828 0.189 84.429);
+  --chart-5: oklch(0.769 0.188 70.08);
+
+  /*
+   * The sidebar is dark navy, and that is not a theme preference — it is what
+   * `components/app-sidebar.jsx` is written against. That file hard-codes
+   * `text-white` on the brand, `slate-500` section labels and `slate-800`
+   * surfaces, all of which assume a dark panel, and it is not ours to edit.
+   * These tokens are therefore BlockTrace's navy rather than the block's
+   * default light grey, which is what keeps the brand legible.
+   */
+  --sidebar: #0f2034;
+  --sidebar-foreground: #eaf1f7;
+  --sidebar-primary: #356a9f;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #183552;
+  --sidebar-accent-foreground: #ffffff;
+  --sidebar-border: #1c3148;
+  --sidebar-ring: #356a9f;
+  --sidebar-width: 16rem;
+  --sidebar-width-icon: 3rem;
+
+  /*
+   * Font stacks, kept from the previous stylesheet so `--font-sans`,
+   * `--font-mono` and `--font-heading` resolve to the same faces as before.
+   */
+  --sans: system-ui, "Segoe UI", Roboto, sans-serif;
   --mono: ui-monospace, Consolas, monospace;
 
-  font: 18px/145% var(--sans);
-  letter-spacing: 0.18px;
-  color-scheme: light dark;
-  color: var(--text);
-  background: var(--bg);
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+  /*
+   * BlockTrace's own accent blue, kept from the previous inline theme.
+   * `pages/landing.jsx` paints its header glow with `--blue-soft`.
+   */
+  --blue-soft: #eaf1f8;
+}
 
-  @media (max-width: 1024px) {
-    font-size: 16px;
+.dark {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.922 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.556 0 0);
+
+  --sidebar: oklch(0.205 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.556 0 0);
+}
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  --font-sans:
+    var(--sans), system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: var(--mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /*
+   * `pages/landing.jsx` sets its display type with `font-heading`, which is a
+   * token of the site's own design rather than one of shadcn's defaults. The
+   * previous stylesheet declared it as a sans stack, so it stays a sans stack
+   * and is simply given a name Tailwind can resolve.
+   */
+  --font-heading: var(--sans), system-ui, -apple-system, "Segoe UI", Roboto,
+    sans-serif;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
   }
-}
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --text: #9ca3af;
-    --text-h: #f3f4f6;
-    --bg: #16171d;
-    --border: #2e303a;
-    --code-bg: #1f2028;
-    --accent: #c084fc;
-    --accent-bg: rgba(192, 132, 252, 0.15);
-    --accent-border: rgba(192, 132, 252, 0.5);
-    --social-bg: rgba(47, 48, 58, 0.5);
-    --shadow:
-      rgba(0, 0, 0, 0.4) 0 10px 15px -3px, rgba(0, 0, 0, 0.25) 0 4px 6px -2px;
+  body {
+    @apply bg-background text-foreground;
   }
-
-  #social .button-icon {
-    filter: invert(1) brightness(2);
-  }
-}
-
-body {
-  margin: 0;
-}
-
-#root {
-  width: 1126px;
-  max-width: 100%;
-  margin: 0 auto;
-  text-align: center;
-  border-inline: 1px solid var(--border);
-  min-height: 100svh;
-  display: flex;
-  flex-direction: column;
-  box-sizing: border-box;
-}
-
-h1,
-h2 {
-  font-family: var(--heading);
-  font-weight: 500;
-  color: var(--text-h);
-}
-
-h1 {
-  font-size: 56px;
-  letter-spacing: -1.68px;
-  margin: 32px 0;
-  @media (max-width: 1024px) {
-    font-size: 36px;
-    margin: 20px 0;
-  }
-}
-h2 {
-  font-size: 24px;
-  line-height: 118%;
-  letter-spacing: -0.24px;
-  margin: 0 0 8px;
-  @media (max-width: 1024px) {
-    font-size: 20px;
-  }
-}
-p {
-  margin: 0;
-}
-
-code,
-.counter {
-  font-family: var(--mono);
-  display: inline-flex;
-  border-radius: 4px;
-  color: var(--text-h);
-}
-
-code {
-  font-size: 15px;
-  line-height: 135%;
-  padding: 4px 8px;
-  background: var(--code-bg);
 }
