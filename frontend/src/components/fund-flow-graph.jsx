@@ -36,6 +36,7 @@ import {
   safeSourceUrl,
   truncateHash,
 } from "@/lib/format";
+import { Disclosure } from "@/components/common";
 
 const FundFlow3D = lazy(() => import("@/components/fund-flow-3d"));
 
@@ -675,11 +676,8 @@ const LEGEND = [
 
 function GraphLegend() {
   return (
-    <details className="rounded-lg border px-3 py-2">
-      <summary className="cursor-pointer text-xs font-medium">
-        What the colours mean
-      </summary>
-      <ul className="mt-2 grid gap-1.5 sm:grid-cols-2">
+    <Disclosure label="Graph legend" hint="what the node colours mean" bodyClassName="text-xs">
+      <ul className="grid gap-1.5 sm:grid-cols-2">
         {LEGEND.map((item) => (
           <li key={item.type} className="flex items-start gap-2 text-xs">
             <span
@@ -699,7 +697,7 @@ function GraphLegend() {
         score. A red line marks a transfer the risk engine flagged; the specific
         reasons are in the risk panel.
       </p>
-    </details>
+    </Disclosure>
   );
 }
 
@@ -749,10 +747,12 @@ export function FundFlowGraph({
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
+        {/* The one place the graph states its own scale. This sentence used to
+            also be repeated in the section description above the graph and again
+            in the sentence under the legend, three times for one fact. */}
         <p className="text-xs text-muted-foreground">
           {nodeList.length} {nodeList.length === 1 ? "address" : "addresses"} ·{" "}
-          {edgeList.length} {edgeList.length === 1 ? "transfer" : "transfers"} ·
-          laid out by hop distance from the subject
+          {edgeList.length} {edgeList.length === 1 ? "transfer" : "transfers"}
         </p>
         <div className="flex gap-1.5">
           <Button

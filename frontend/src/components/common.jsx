@@ -12,6 +12,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
   Check,
+  ChevronRight,
   Copy,
   ExternalLink,
   Info,
@@ -453,12 +454,41 @@ export function EvidenceNotes({ notes, title = "Evidence notes", className = "" 
             key={i}
             className="rounded-md border border-dashed bg-muted/30 px-3 py-2 text-xs leading-5 text-muted-foreground"
           >
-            {note}
+            {humaniseNote(note)}
           </li>
         ))}
       </ul>
     </div>
   );
+}
+
+/**
+ * Strip a Python exception class name out of a stored note.
+ *
+ * The orchestrator records failures with the exception type interpolated in,
+ * e.g. "The PDF dossier could not be rendered (ValueError)." That is accurate
+ * and it is useful to whoever debugs the renderer, but `ValueError` tells an
+ * investigator nothing actionable -- it is a name in the implementation, not a
+ * finding about the case. The note is rewritten to say what happened without
+ * naming the internal type. Nothing is invented and no note is dropped: a note
+ * with no exception class in it passes through untouched.
+ */
+const EXCEPTION_IN_PARENS = /\s*\(([A-Z][A-Za-z0-9_]*(?:Error|Exception))\)/g;
+
+function humaniseNote(note) {
+  if (typeof note !== "string") return note;
+  // A fresh non-global regex for the guard: `EXCEPTION_IN_PARENS` is global, and
+  // testing a global regex advances its `lastIndex`, so the check would skip
+  // every other note in a list.
+  if (!new RegExp(EXCEPTION_IN_PARENS.source).test(note)) return note;
+  const cleaned = note
+    .replace(EXCEPTION_IN_PARENS, "")
+    .replace(/\s+\./g, ".")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  // A note that was nothing but an exception name has no user-safe wording to
+  // fall back on, so it is kept rather than silently blanked.
+  return cleaned || note;
 }
 
 /**
@@ -501,6 +531,59 @@ export function ProviderLedger({ usage, className = "" }) {
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+/**
+ * A collapsible section.
+ *
+ * A real `<button>` with `aria-expanded` and `aria-controls`, not a styled
+ * `<div>`: these sections carry methodology, provider attribution and scope
+ * limits, so they have to be reachable and announceable by keyboard and screen
+ * reader rather than merely look clickable.
+ *
+ * Native `<details>` was the previous mechanism on this page. It is replaced here
+ * because it cannot be given a chevron, an id for `aria-controls`, or a
+ * consistent row height, and because `summary` inside a flex row needs
+ * `list-none`/`marker:hidden` patching that is easy to get wrong per browser.
+ */
+export function Disclosure({
+  label,
+  hint = null,
+  children,
+  defaultOpen = false,
+  className = "",
+  bodyClassName = "",
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  const [bodyId] = useState(() => `disclosure-${Math.random().toString(36).slice(2, 9)}`);
+
+  return (
+    <div className={`rounded-xl border bg-card/50 ${className}`}>
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls={bodyId}
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-2 px-4 py-3 text-left text-sm font-medium transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+      >
+        <ChevronRight
+          className={`size-4 shrink-0 text-muted-foreground transition-transform ${open ? "rotate-90" : ""}`}
+          aria-hidden="true"
+        />
+        <span>{label}</span>
+        {hint ? (
+          <span className="truncate text-xs font-normal text-muted-foreground">
+            {hint}
+          </span>
+        ) : null}
+      </button>
+      {open ? (
+        <div id={bodyId} className={`border-t px-4 py-3 ${bodyClassName}`}>
+          {children}
+        </div>
+      ) : null}
     </div>
   );
 }

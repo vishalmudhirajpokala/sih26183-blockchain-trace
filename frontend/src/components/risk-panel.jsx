@@ -17,11 +17,12 @@
  * new conclusion, and this one has not been reviewed.
  */
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { ShieldAlert, ShieldCheck, ShieldQuestion } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import {
+  Disclosure,
   RiskBadge,
   ScoreBar,
   SectionCard,
@@ -57,60 +58,91 @@ const WEIGHT_NOTES = {
     "Many very small transfers, which is what address-rotation poisoning looks like.",
 };
 
-/** One indicator: what it is, why it fired, and what it cost the score. */
+/**
+ * One indicator, as a scannable row with its derivation behind a toggle.
+ *
+ * The name and the weight are the finding and stay on the surface. The evidence
+ * paragraph is three or four sentences of genuine analysis, and with two or more
+ * indicators permanently expanded it pushed everything below -- the graph, the
+ * ledger -- off the first screen. So the reasoning is still present, still
+ * attributed, and still one keystroke away, but it is not what you read first.
+ */
 function Indicator({ indicator }) {
+  const [showDetail, setShowDetail] = useState(false);
   const evidence = indicator.evidence;
+  const hasDetail = Boolean(
+    evidence ||
+      WEIGHT_NOTES[indicator.code] ||
+      indicator.source ||
+      indicator.related_addresses?.length ||
+      indicator.related_transactions?.length,
+  );
+
   return (
-    <li className="rounded-md border bg-card px-3 py-2.5">
-      <div className="flex flex-wrap items-center gap-2">
+    <li className="rounded-md border bg-card">
+      <div className="flex flex-wrap items-center gap-2 px-3 py-2">
         <SeverityChip severity={indicator.severity} />
-        <span className="text-sm font-medium">
+        <span className="min-w-0 flex-1 text-sm font-medium">
           {indicator.name || indicator.code}
         </span>
-        <span className="ml-auto font-mono text-xs text-muted-foreground">
+        <span className="font-mono text-xs text-muted-foreground">
           +{indicator.weight}
         </span>
+        {hasDetail ? (
+          <button
+            type="button"
+            aria-expanded={showDetail}
+            onClick={() => setShowDetail((v) => !v)}
+            className="text-xs text-muted-foreground underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+          >
+            {showDetail ? "Hide detail" : "Details"}
+          </button>
+        ) : null}
       </div>
 
-      {evidence ? (
-        <p className="mt-1.5 text-xs leading-5 text-muted-foreground">{evidence}</p>
-      ) : (
-        <p className="mt-1.5 text-xs leading-5 text-amber-700 dark:text-amber-400">
-          This indicator fired without recording why. Treat it as unsupported
-          until the engine records evidence for it.
-        </p>
-      )}
+      {showDetail ? (
+        <div className="border-t px-3 py-2.5">
+          {evidence ? (
+            <p className="text-xs leading-5 text-muted-foreground">{evidence}</p>
+          ) : (
+            <p className="text-xs leading-5 text-amber-700 dark:text-amber-400">
+              This indicator fired without recording why. Treat it as unsupported
+              until the engine records evidence for it.
+            </p>
+          )}
 
-      {WEIGHT_NOTES[indicator.code] ? (
-        <p className="mt-1 text-[10px] leading-4 text-muted-foreground">
-          {WEIGHT_NOTES[indicator.code]}
-        </p>
+          {WEIGHT_NOTES[indicator.code] ? (
+            <p className="mt-1.5 text-[10px] leading-4 text-muted-foreground">
+              {WEIGHT_NOTES[indicator.code]}
+            </p>
+          ) : null}
+
+          <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-muted-foreground">
+            {indicator.source ? <span>Source: {indicator.source}</span> : null}
+            {indicator.related_addresses?.length ? (
+              <span>
+                Addresses:{" "}
+                {indicator.related_addresses
+                  .slice(0, 3)
+                  .map((a) => truncateHash(a, 8, 6))
+                  .join(", ")}
+                {indicator.related_addresses.length > 3
+                  ? ` +${indicator.related_addresses.length - 3} more`
+                  : ""}
+              </span>
+            ) : null}
+            {indicator.related_transactions?.length ? (
+              <span>
+                Transactions:{" "}
+                {indicator.related_transactions
+                  .slice(0, 2)
+                  .map((h) => truncateHash(h, 8, 6))
+                  .join(", ")}
+              </span>
+            ) : null}
+          </div>
+        </div>
       ) : null}
-
-      <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-muted-foreground">
-        {indicator.source ? <span>Source: {indicator.source}</span> : null}
-        {indicator.related_addresses?.length ? (
-          <span>
-            Addresses:{" "}
-            {indicator.related_addresses
-              .slice(0, 3)
-              .map((a) => truncateHash(a, 8, 6))
-              .join(", ")}
-            {indicator.related_addresses.length > 3
-              ? ` +${indicator.related_addresses.length - 3} more`
-              : ""}
-          </span>
-        ) : null}
-        {indicator.related_transactions?.length ? (
-          <span>
-            Transactions:{" "}
-            {indicator.related_transactions
-              .slice(0, 2)
-              .map((h) => truncateHash(h, 8, 6))
-              .join(", ")}
-          </span>
-        ) : null}
-      </div>
     </li>
   );
 }
@@ -135,7 +167,7 @@ export function RiskPanel({ risk, className = "" }) {
   return (
     <SectionCard
       title="Risk assessment"
-      description="Produced by one shared engine for every chain. The score is a summary; the indicators underneath it are the finding."
+      description="One shared engine for every chain. The score is a summary; the indicators are the finding."
       className={className}
       bodyClassName="space-y-4"
     >
@@ -162,6 +194,11 @@ export function RiskPanel({ risk, className = "" }) {
                 </Badge>
               ) : null}
             </div>
+            {/*
+              The engine's own verdict sentence, verbatim and unparaphrased.
+              A paraphrase of a conclusion is a new conclusion, and this one has
+              not been reviewed.
+            */}
             {assessment.assessment ? (
               <p className="mt-2 max-w-2xl text-sm leading-6">{assessment.assessment}</p>
             ) : (
@@ -189,9 +226,11 @@ export function RiskPanel({ risk, className = "" }) {
       {indicators.length > 0 ? (
         <div>
           <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-            Indicators ({indicators.length})
+            {indicators.length === 1
+              ? "1 indicator detected"
+              : `${indicators.length} indicators detected`}
           </h3>
-          <ul className="mt-2 space-y-2">
+          <ul className="mt-2 space-y-1.5">
             {indicators.map((ind, i) => (
               <Indicator key={`${ind.code}-${i}`} indicator={ind} />
             ))}
@@ -199,15 +238,22 @@ export function RiskPanel({ risk, className = "" }) {
         </div>
       ) : null}
 
+      {/*
+        The engine's accounting, collapsed. It is real evidence -- it is how you
+        check that a score of 45 is 25 plus 20 and not a number that arrived from
+        nowhere -- but it is a derivation, not the finding, so it is not on the
+        first screen.
+      */}
       {Object.keys(breakdown).length > 0 ? (
-        <details className="rounded-md border px-3 py-2">
-          <summary className="cursor-pointer text-xs font-medium">
-            How the score was reached
-          </summary>
-          <dl className="mt-2 space-y-1">
+        <Disclosure
+          label="How was this score calculated"
+          hint="the engine's own accounting"
+          bodyClassName="text-xs"
+        >
+          <dl className="space-y-1">
             {Object.entries(breakdown).map(([code, contribution]) => (
               <div key={code} className="flex items-baseline justify-between gap-3 text-xs">
-                <dt className="text-muted-foreground">{code}</dt>
+                <dt className="font-mono text-muted-foreground">{code}</dt>
                 <dd className="font-mono">
                   <Value>{contribution}</Value>
                 </dd>
@@ -221,24 +267,36 @@ export function RiskPanel({ risk, className = "" }) {
             </div>
           </dl>
           <p className="mt-2 text-[10px] leading-4 text-muted-foreground">
-            The engine's own accounting, shown as it recorded it. If the total
-            above does not match the score, the discrepancy is in the engine,
-            not a rounding artefact.
+            Shown as the engine recorded it. If the total does not match the score,
+            the discrepancy is in the engine, not a rounding artefact.
           </p>
-        </details>
+        </Disclosure>
       ) : null}
 
-      <p className="text-[10px] leading-4 text-muted-foreground">
-        A risk score describes the data that was returned for this run. It is
-        not a legal judgement, not a compliance determination, and not evidence
-        that any address is controlled by any person. Verify against the cited
-        sources before acting on it.
-        {indicators.length
-          ? ` Indicators shown: ${indicators
-              .map((i) => `${i.name || i.code} (${severityLabel(i.severity).toLowerCase()})`)
-              .join(", ")}.`
-          : null}
-      </p>
+      {/*
+        The limits of the number, collapsed. This is the part most often left off
+        a risk panel and the part that decides whether a reader over-reads it, so
+        it is kept in full -- just not permanently in the way.
+      */}
+      <Disclosure label="About this risk score" bodyClassName="text-xs">
+        <p className="leading-5 text-muted-foreground">
+          A risk score describes the data that was returned for this run. It is
+          not a legal judgement, not a compliance determination, and not evidence
+          that any address is controlled by any person. Verify against the cited
+          sources before acting on it.
+        </p>
+        {indicators.length ? (
+          <p className="mt-2 leading-5 text-muted-foreground">
+            Indicators shown:{" "}
+            {indicators
+              .map(
+                (i) => `${i.name || i.code} (${severityLabel(i.severity).toLowerCase()})`,
+              )
+              .join(", ")}
+            .
+          </p>
+        ) : null}
+      </Disclosure>
     </SectionCard>
   );
 }
