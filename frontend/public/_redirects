@@ -1,0 +1,5 @@
+# SPA fallback. BlockTrace routes entirely on the client, so a refresh on
+# /app/investigations/<id> is a request for that path from the web server, not
+# for /index.html. Without this line it 404s, and an investigator who bookmarks
+# a case finds their evidence does not survive a page reload.
+/*    /index.html   200

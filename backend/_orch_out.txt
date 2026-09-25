@@ -1,0 +1,109 @@
+﻿==============================================================================
+DETECTION
+==============================================================================
+TRON address                         chain=tron       type=address            valid=True ambiguous=False
+Ethereum address                     chain=ethereum   type=address            valid=True ambiguous=True
+Polygon address                      chain=polygon    type=address            valid=True ambiguous=True
+BSC address (no keyless provider)    chain=bsc        type=address            valid=True ambiguous=True
+Bitcoin genesis address              chain=bitcoin    type=address            valid=True ambiguous=False
+Bitcoin segwit address               chain=bitcoin    type=address            valid=True ambiguous=False
+Bitcoin taproot address              chain=bitcoin    type=address            valid=True ambiguous=False
+Ethereum tx hash                     chain=None       type=None               valid=False ambiguous=False
+garbage                              chain=None       type=None               valid=False ambiguous=False
+TRON bad checksum                    chain=tron       type=address            valid=False ambiguous=False
+
+==============================================================================
+FULL INVESTIGATION (depth 1, capped)
+==============================================================================
+
+TRON address
+  chain      : tron (TRON)  input=address
+  seed       : TCDo8KbRTPMHHU6B2VfPPSdWQPhmAZJKaY
+  status     : partial
+  detail     : The trace stopped early. Results below cover only the addresses that were actually examined.
+  graph      : nodes=3 edges=2 txs=2 hops=0
+  risk       : score=20 level=MEDIUM indicators=1
+     - large_transfer (medium, w=20) Transfer of 2e-06 TRX is most of the observed volume
+  entity     : None
+  truncated  : True ['max_depth (1) reached at TCDo8KbRTPMHHU6B2VfPPSdWQPhmAZJKaY']
+  providers  : 6 call(s), 6778ms
+
+Ethereum address
+  chain      : ethereum (Ethereum)  input=address
+  seed       : 0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045
+  status     : partial
+  detail     : The trace stopped early. Results cover only the addresses that were actually examined. A public provider label was seen 
+  graph      : nodes=3 edges=4 txs=4 hops=0
+  risk       : score=20 level=MEDIUM indicators=1
+     - large_transfer (medium, w=20) Transfer of 9.68396e+06 ETHERFUN is most of the observed vol
+  entity     : vitalik.eth
+  truncated  : True ['max_depth (1) reached at 0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045']
+  providers  : 5 call(s), 6685ms
+
+Polygon address
+  chain      : polygon (Polygon)  input=address
+  seed       : 0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045
+  status     : partial
+  detail     : The trace stopped early. Results cover only the addresses that were actually examined.
+  graph      : nodes=5 edges=4 txs=4 hops=0
+  risk       : score=20 level=MEDIUM indicators=1
+     - large_transfer (medium, w=20) Transfer of 464 BIGM is most of the observed volume
+  entity     : None
+  truncated  : True ['max_depth (1) reached at 0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045']
+  providers  : 5 call(s), 7085ms
+
+BSC address (no keyless provider)
+  chain      : bsc (BNB Smart Chain)  input=address
+  seed       : 0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045
+  status     : inconclusive
+  detail     : No keyless transaction-history provider for BNB Smart Chain. Public RPC nodes cannot index an address without an archiva
+  graph      : nodes=0 edges=0 txs=0 hops=0
+  risk       : score=0 level=UNKNOWN indicators=0
+  entity     : None
+  truncated  : False []
+  providers  : 0 call(s), 0ms
+
+Bitcoin genesis address
+  chain      : bitcoin (Bitcoin)  input=address
+  seed       : 1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa
+  status     : partial
+  detail     : The trace stopped early. Results cover only the addresses that were actually examined.
+  graph      : nodes=5 edges=2 txs=2 hops=0
+  risk       : score=0 level=LOW indicators=0
+  entity     : None
+  truncated  : True ['max_depth (1) reached at 1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa']
+  providers  : 1 call(s), 1888ms
+
+Bitcoin segwit address
+  chain      : bitcoin (Bitcoin)  input=address
+  seed       : bc1qp8lhysjtd0uuv4lj2fcf2u5jjz37qnn7j3pvan
+  status     : partial
+  detail     : The trace stopped early. Results cover only the addresses that were actually examined.
+  graph      : nodes=2 edges=2 txs=2 hops=0
+  risk       : score=20 level=MEDIUM indicators=1
+     - large_transfer (medium, w=20) Transfer of 0.00010419 BTC is most of the observed volume
+  entity     : None
+  truncated  : True ['max_depth (1) reached at bc1qp8lhysjtd0uuv4lj2fcf2u5jjz37qnn7j3pvan']
+  providers  : 1 call(s), 1638ms
+
+Bitcoin taproot address
+  chain      : bitcoin (Bitcoin)  input=address
+  seed       : bc1pk37vzt3ulx72pqxvpk66uja5txg83l688vcru8je
+  status     : partial
+  detail     : The trace stopped early. Results cover only the addresses that were actually examined.
+  graph      : nodes=4 edges=1 txs=1 hops=0
+  risk       : score=0 level=LOW indicators=0
+  entity     : None
+  truncated  : True ['max_depth (1) reached at bc1pk37vzt3ulx72pqxvpk66uja5txg83l688vcru8je969xygc863tqluq64c']
+  providers  : 1 call(s), 1344ms
+
+Ethereum tx hash:
+  DetectionError: Input is not a valid address or transaction hash on any supported chain: input format not recognized as a supported address or transaction hash
+
+garbage:
+  DetectionError: Input is not a valid address or transaction hash on any supported chain: input format not recognized as a supported address or transaction hash
+
+TRON bad checksum:
+  DetectionError: Input is not a valid address or transaction hash on any supported chain: expected 34 characters, got 35
+
+All result shapes identical across chains — engine is chain-agnostic.
