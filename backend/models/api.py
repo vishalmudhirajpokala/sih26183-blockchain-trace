@@ -187,11 +187,24 @@ class NetworkStatusResponse(BaseModel):
 
     Any metric a provider does not expose is `None` with an explicit
     availability marker beside it. It is never filled with a plausible number.
+
+    `block_hash`, `block_timestamp`, `transaction_count`, `provider` and
+    `availability` were added because `routers/network.py` already computed all
+    five from the adapter's `NetworkInfo`, and Pydantic was silently discarding
+    them because they were not declared here. The network explorer reads every
+    one of them, so without these fields the page reported a chain's provider
+    and tip timestamp as permanently unavailable even though the backend had
+    them in hand.
     """
 
     chain: str
     chain_name: str
     block_height: Optional[int] = None
+    block_hash: Optional[str] = None
+    block_timestamp: Optional[int] = None
+    transaction_count: Optional[int] = None
+    provider: Optional[str] = None
+    availability: str = "available"
     tps: Optional[float] = None
     tps_availability: str = "not_provided"
     average_block_time_seconds: Optional[float] = None

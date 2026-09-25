@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 
 from models.api import ErrorResponse, PaginatedResponse
 from models.schemas import Chain
@@ -84,7 +84,7 @@ def list_entities(
     offset: int = Query(0, ge=0),
     entity_type: Optional[str] = Query(None, description="Filter by entity type"),
     chain: Optional[Chain] = None,
-    authorization: Optional[str] = None,
+    authorization: Optional[str] = Header(None),
     identity: dict = Depends(_identity),
 ) -> PaginatedResponse:
     """
@@ -115,7 +115,7 @@ def list_entities(
     summary="Entity types present, with their provenance tiers",
 )
 def entity_types(
-    authorization: Optional[str] = None,
+    authorization: Optional[str] = Header(None),
     identity: dict = Depends(_identity),
 ) -> dict:
     """
@@ -162,7 +162,7 @@ def entity_types(
 def entity_detail(
     chain_value: Chain,
     address: str,
-    authorization: Optional[str] = None,
+    authorization: Optional[str] = Header(None),
     identity: dict = Depends(_identity),
 ) -> dict:
     """

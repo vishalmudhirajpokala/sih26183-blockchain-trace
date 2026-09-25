@@ -23,6 +23,17 @@ from reportlab.platypus import (
     KeepTogether,
 )
 
+from models.api import HealthResponse
+from routers import (
+    analytics as analytics_router,
+    auth as auth_router,
+    entities as entities_router,
+    investigations as investigations_router,
+    network as network_router,
+    reports as reports_router,
+    trace as trace_router,
+)
+from services.chain_registry import supported_chains
 from trace import trace_wallet
 
 
@@ -40,10 +51,39 @@ load_dotenv()
 app = FastAPI(
     title="BlockTrace Investigation API",
     description=(
-        "TRON blockchain investigation and fund-flow tracing API."
+        "Multi-chain blockchain investigation, entity attribution, risk "
+        "scoring and fund-flow tracing API."
     ),
     version="1.0.0",
 )
+
+
+# ============================================================
+# ROUTERS
+# ============================================================
+#
+# The seven routers below were already fully implemented -- adapters, risk
+# engine, entity resolution, repository, report rendering -- but nothing ever
+# called `include_router`, so the running application served only the legacy
+# TRON-only `/trace` endpoint defined at the bottom of this file. Every frontend
+# page was therefore issuing real requests that 404'd.
+#
+# Registering them is the whole fix; no router, service or schema had to change
+# to make them reachable.
+#
+# Order matters in one place only: `/reports` is registered BEFORE the static
+# mount further down, because the router's `GET /reports/{filename}` checks that
+# the caller is allowed to see the file. A StaticFiles mount placed first would
+# answer that path first and bypass the ownership check.
+#
+
+app.include_router(auth_router.router)
+app.include_router(trace_router.router)
+app.include_router(investigations_router.router)
+app.include_router(analytics_router.router)
+app.include_router(entities_router.router)
+app.include_router(network_router.router)
+app.include_router(reports_router.router)
 
 
 # ============================================================
@@ -1200,23 +1240,80 @@ def generate_report(
 # ============================================================
 # HEALTH CHECK
 # ============================================================
+#
+# These used to return two hard-coded strings describing a TRON-only service,
+# which was both wrong (the API has been multi-chain) and uninformative: the
+# landing page reads `version`, `persistence` and `chains` from `/health` to
+# tell a visitor what this deployment actually is, and every one of them came
+# back missing. The `HealthResponse` model that describes this properly already
+# existed in `models/api.py` and was never used.
+#
+# `chains` is read from the chain registry rather than written out by hand, so
+# it cannot drift from the adapters that are really registered. `config` reports
+# only which integrations are *configured* -- never a key, never a URL with a
+# credential in it.
+
+def _chain_slugs() -> list:
+    try:
+        return [chain.value for chain in supported_chains()]
+    except Exception:
+        return []
+
+
+def _auth_mode() -> str:
+    try:
+        from services.auth import auth_status
+
+        return auth_status().get("mode", "unknown")
+    except Exception:
+        return "unknown"
+
+
+def _persistence() -> str:
+    try:
+        from services.repository import get_repository
+
+        # `describe()` returns a dict; `HealthResponse.persistence` is a string,
+        # and the only part of it a visitor needs is which store is in use.
+        return str(get_repository().describe().get("backend", "unknown"))
+    except Exception:
+        return "unavailable"
+
+
+def _config_summary() -> Dict[str, Any]:
+    import config as backend_config
+
+    return {
+        "demo_mode": bool(backend_config.DEMO_MODE),
+        "tronscan": bool(backend_config.TRONSCAN_API_KEY),
+        "trongrid": bool(backend_config.TRONGRID_API_KEY),
+        "etherscan": bool(backend_config.ETHERSCAN_API_KEY),
+        "supabase": backend_config.has_supabase(),
+        "mempool_space": True,
+    }
+
 
 @app.get("/")
 def root():
     return {
         "service": "BlockTrace Investigation API",
         "status": "online",
-        "network": "TRON",
+        "network": "multi-chain",
+        "chains": _chain_slugs(),
         "docs": "/docs",
     }
 
 
-@app.get("/health")
-def health():
-    return {
-        "status": "healthy",
-        "network": "TRON",
-    }
+@app.get("/health", response_model=HealthResponse)
+def health() -> HealthResponse:
+    return HealthResponse(
+        status="healthy",
+        version=app.version,
+        chains=_chain_slugs(),
+        config=_config_summary(),
+        persistence=_persistence(),
+        auth=_auth_mode(),
+    )
 
 
 # ============================================================

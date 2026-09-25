@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 
 from models.api import ErrorResponse, PaginatedResponse, SaveInvestigationBody
 from routers.trace import _identity
@@ -53,7 +53,7 @@ def list_investigations(
     chain: Optional[str] = None,
     risk_level: Optional[str] = None,
     search: Optional[str] = Query(None, max_length=200),
-    authorization: Optional[str] = None,
+    authorization: Optional[str] = Header(None),
     identity: dict = Depends(_identity),
 ) -> PaginatedResponse:
     """The investigation history, newest first, scoped to the caller."""
@@ -78,7 +78,7 @@ def list_investigations(
 )
 def get_investigation(
     investigation_id: str,
-    authorization: Optional[str] = None,
+    authorization: Optional[str] = Header(None),
     identity: dict = Depends(_identity),
 ) -> dict:
     """
@@ -116,7 +116,7 @@ def get_investigation(
 )
 def save_investigation(
     body: SaveInvestigationBody,
-    authorization: Optional[str] = None,
+    authorization: Optional[str] = Header(None),
     identity: dict = Depends(_identity),
 ) -> dict:
     """
@@ -175,7 +175,7 @@ def save_investigation(
 )
 def delete_investigation(
     investigation_id: str,
-    authorization: Optional[str] = None,
+    authorization: Optional[str] = Header(None),
     identity: dict = Depends(_identity),
 ) -> dict:
     """Removes the case record. The generated PDF is left in place on disk."""

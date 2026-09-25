@@ -14,7 +14,7 @@ import os
 import re
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from fastapi.responses import FileResponse
 
 import config
@@ -69,7 +69,7 @@ def list_reports(
     limit: int = Query(25, ge=1, le=200),
     offset: int = Query(0, ge=0),
     chain: Optional[str] = None,
-    authorization: Optional[str] = None,
+    authorization: Optional[str] = Header(None),
     identity: dict = Depends(_identity),
 ) -> PaginatedResponse:
     """
@@ -106,7 +106,7 @@ def list_reports(
 )
 def download_report(
     filename: str,
-    authorization: Optional[str] = None,
+    authorization: Optional[str] = Header(None),
     identity: dict = Depends(_identity),
 ) -> FileResponse:
     """
@@ -145,7 +145,7 @@ def download_report(
 )
 def regenerate_report(
     investigation_id: str,
-    authorization: Optional[str] = None,
+    authorization: Optional[str] = Header(None),
     identity: dict = Depends(_identity),
 ) -> dict:
     """

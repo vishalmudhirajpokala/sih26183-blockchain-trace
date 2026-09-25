@@ -12,7 +12,7 @@ from __future__ import annotations
 from collections import Counter
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Header, Query
 
 from models.api import ErrorResponse
 from routers.trace import _identity
@@ -28,7 +28,7 @@ router = APIRouter(prefix="/analytics", tags=["analytics"])
 )
 def overview(
     limit: int = Query(500, ge=1, le=2000),
-    authorization: Optional[str] = None,
+    authorization: Optional[str] = Header(None),
     identity: dict = Depends(_identity),
 ) -> dict:
     """
@@ -107,7 +107,7 @@ def overview(
 )
 def risk_trend(
     limit: int = Query(200, ge=1, le=1000),
-    authorization: Optional[str] = None,
+    authorization: Optional[str] = Header(None),
     identity: dict = Depends(_identity),
 ) -> dict:
     """A time series of scores, oldest first, for the dashboard chart."""

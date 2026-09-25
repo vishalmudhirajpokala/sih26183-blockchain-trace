@@ -21,10 +21,12 @@ import { ArrowLeft, ExternalLink } from "lucide-react";
 
 import { api } from "@/lib/api";
 import {
+  NOT_AVAILABLE,
   chainLabel,
   entityTypeClass,
   entityTypeLabel,
   explorerUrl,
+  formatCount,
   formatDateTime,
   provenanceTier,
   safeSourceUrl,
@@ -176,7 +178,16 @@ export default function EntityDetail() {
           },
           {
             label: "Appearances",
-            value: entity.investigation_count ?? 0,
+            /*
+             * A missing `investigation_count` is not zero appearances. The
+             * backend omits the field when it cannot attribute the address to
+             * any case, and rendering `0` there would state a measurement the
+             * API never made.
+             */
+            value:
+              typeof entity.investigation_count === "number"
+                ? formatCount(entity.investigation_count)
+                : NOT_AVAILABLE,
             tooltip: "Cases in which this address was seen.",
           },
         ]}

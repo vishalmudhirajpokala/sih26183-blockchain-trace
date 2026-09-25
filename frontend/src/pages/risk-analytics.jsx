@@ -18,6 +18,7 @@ import { Activity } from "lucide-react";
 
 import { api } from "@/lib/api";
 import {
+  NOT_AVAILABLE,
   chainLabel,
   entityTypeClass,
   entityTypeLabel,
@@ -112,7 +113,17 @@ export default function RiskAnalytics() {
   const entities = overview.entities || {};
   const reports = overview.reports || {};
 
-  const analysed = basis.analysed_here ?? 0;
+  /*
+   * A counter the backend did not report is not a counter of zero.
+   *
+   * `?? 0` was turning "this field is absent" into "there were none of them",
+   * which is a measurement the API never made. `count()` below keeps a genuine
+   * `0` (a real, reportable answer) and turns only a missing field into null,
+   * which renders as "Not available".
+   */
+  const count = (n) => (typeof n === "number" ? formatCount(n) : NOT_AVAILABLE);
+
+  const analysed = basis.analysed_here;
   const scores = Array.isArray(risk.scores) ? risk.scores : [];
   const byLevel = risk.by_level || {};
   const byChain = distribution.by_chain || {};
@@ -164,17 +175,17 @@ export default function RiskAnalytics() {
               },
               {
                 label: "Cases on record",
-                value: formatCount(basis.investigation_count ?? 0),
+                value: count(basis.investigation_count),
                 tooltip: "Total saved cases for this account.",
               },
               {
                 label: "Transactions inspected",
-                value: formatCount(basis.transactions_inspected ?? 0),
+                value: count(basis.transactions_inspected),
                 tooltip: "Summed across the analysed cases.",
               },
               {
                 label: "Dossiers generated",
-                value: formatCount(reports.generated ?? 0),
+                value: count(reports.generated),
               },
             ]}
           />
@@ -320,7 +331,7 @@ export default function RiskAnalytics() {
                   {formatCount(analysed)}
                 </ValueRow>
                 <ValueRow label="Cases on record" mono>
-                  {formatCount(basis.investigation_count ?? 0)}
+                  {count(basis.investigation_count)}
                 </ValueRow>
                 <p className="mt-3 text-sm leading-6 text-muted-foreground">
                   {basis.note}
@@ -373,10 +384,10 @@ export default function RiskAnalytics() {
               {entities.distinct_names ? (
                 <SectionCard title="Attributed entities">
                   <ValueRow label="Cases with an attribution" mono>
-                    {formatCount(entities.attributed_investigations ?? 0)}
+                    {count(entities.attributed_investigations)}
                   </ValueRow>
                   <ValueRow label="Distinct names" mono>
-                    {formatCount(entities.distinct_names ?? 0)}
+                    {count(entities.distinct_names)}
                   </ValueRow>
                   {Array.isArray(entities.names) && entities.names.length ? (
                     <div className="mt-3 flex flex-wrap gap-1.5">

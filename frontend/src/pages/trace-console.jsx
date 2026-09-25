@@ -314,6 +314,7 @@ function ResultPanel({ response, onReset }) {
         <TransactionTable
           transactions={result.transactions || []}
           chain={result.chain}
+          seed={result.seed}
         />
       </SectionCard>
 
