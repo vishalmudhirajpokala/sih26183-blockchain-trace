@@ -35,6 +35,7 @@ from models.schemas import (
 )
 from services import risk_engine
 from services.chain_detection import detect_chain, resolve_chain_by_evidence
+from services.flow_intel import flow_shape, investigative_recommendations
 from services.chain_registry import get_adapter
 from utils.http_client import HttpClient, RequestCache
 
@@ -255,6 +256,27 @@ def run_investigation(
         truncation_reasons=list(dict.fromkeys(adapter_trace.truncation_reasons)),
         chain_resolution=chain_resolution,
     )
+
+    # Flow-shape classification, computed once the result is whole.
+    #
+    # This is what lets the platform narrow down *where* a VASP is without
+    # anyone having supplied a VASP name: an address that fans out to many
+    # senders and many recipients behaves like a deposit address, one that only
+    # receives from many parties behaves like a collection wallet. It is a
+    # reproducible statement about the transfers in front of us, recorded at the
+    # heuristic tier, and it names nobody. It cannot replace a curated
+    # `curated_verified` label and is not trying to.
+    try:
+        shapes = flow_shape(result)
+        result.metadata.flow_shapes = shapes
+        result.metadata.recommendations = investigative_recommendations(result, shapes)
+    except Exception as exc:  # noqa: BLE001
+        # A classification failure must never cost the investigator the trace.
+        # The result is already assembled and truthful; it simply has no shapes.
+        result.notes.append(
+            f"Flow-shape classification was unavailable for this run ({type(exc).__name__}). "
+            f"The transfers, risk assessment and graph below are unaffected."
+        )
 
     return result
 

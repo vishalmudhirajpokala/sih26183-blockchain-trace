@@ -260,7 +260,152 @@ function FundFlowSummary({ result, transactions, nodes, onSelectNode }) {
           </div>
         </>
       )}
+
+      <FlowShapes result={result} nodes={nodes} onSelectNode={onSelectNode} />
     </SectionCard>
+  );
+}
+
+/**
+ * Where the value probably went, and what to do about it.
+ *
+ * Flow shape is derived from the transfers already in front of us, so it needs
+ * no external dataset and cannot be wrong about a company it has no evidence
+ * for. It answers a narrower and more useful question than entity attribution:
+ * not "which exchange is this" but "which of these addresses behaves like a
+ * deposit address, and which one only ever receives" -- which is where a
+ * freezing request would be worth filing.
+ *
+ * The engine's own recommendation text is rendered verbatim, so an analyst reads
+ * the reasoning rather than a score with no explanation.
+ */
+/**
+ * A stable empty map. `metadata.flow_shapes || {}` inline would mint a new
+ * object identity on every render, which makes it an unstable `useMemo`
+ * dependency and silently defeats the memo.
+ */
+const NO_SHAPES = Object.freeze({});
+
+function FlowShapes({ result, nodes, onSelectNode }) {
+  const metadata = result.metadata || {};
+  const shapes = metadata.flow_shapes || NO_SHAPES;
+  const recommendations = Array.isArray(metadata.recommendations)
+    ? metadata.recommendations
+    : [];
+
+  const byShape = useMemo(() => {
+    const groups = { exchange_like: [], collector: [], distributor: [], relay: [] };
+    for (const node of nodes) {
+      const shape = shapes[String(node.address || "").toLowerCase()];
+      if (shape && groups[shape.shape]) groups[shape.shape].push({ node, shape });
+    }
+    return groups;
+  }, [nodes, shapes]);
+
+  const interesting = [
+    ...byShape.exchange_like,
+    ...byShape.collector,
+    ...byShape.distributor,
+  ];
+  if (interesting.length === 0 && recommendations.length === 0) return null;
+
+  const SHAPE_COPY = {
+    exchange_like: {
+      label: "Exchange-shaped",
+      note: "Receives from many senders and pays many recipients. The behaviour of a deposit address.",
+    },
+    collector: {
+      label: "Receives only",
+      note: "Takes value from several parties and pays almost no one. How a collection wallet or burner behaves.",
+    },
+    distributor: {
+      label: "Scatters value",
+      note: "Pays many recipients while receiving from few. Consistent with a payout stage.",
+    },
+  };
+
+  return (
+    <div className="border-t pt-4">
+      <Disclosure
+        label="Where the value likely went"
+        hint={`${interesting.length} address${interesting.length === 1 ? "" : "es"} behaving like an aggregation or cash-out point`}
+        bodyClassName="text-xs"
+      >
+        {/*
+          Stated once, up front, because the single most misleading thing this
+          panel could do is let a reader conclude it identified an exchange. It
+          did not. It found an address that behaves like one.
+        */}
+        <p className="leading-5 text-muted-foreground">
+          Derived from the transfers in this investigation. A shape is a
+          pattern in observed behaviour, not an identification: it names no
+          operator, and an address behaving this way is not thereby involved in
+          crime.
+        </p>
+
+        {recommendations.length ? (
+          <ul className="mt-3 space-y-3">
+            {recommendations.map((rec) => (
+              <li key={rec.code} className="rounded-md border bg-card px-3 py-2.5">
+                <p className="text-sm font-medium">{rec.title}</p>
+                <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                  {rec.detail}
+                </p>
+                {rec.next_step ? (
+                  <p className="mt-1.5 text-xs leading-5">
+                    <span className="font-medium">Suggested next step: </span>
+                    <span className="text-muted-foreground">{rec.next_step}</span>
+                  </p>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        ) : null}
+
+        {interesting.length ? (
+          <ul className="mt-3 space-y-3">
+            {Object.entries(SHAPE_COPY).map(([key, copy]) => {
+              const group = byShape[key];
+              if (!group || group.length === 0) return null;
+              return (
+                <li key={key}>
+                  <p className="text-xs font-semibold">
+                    {copy.label}{" "}
+                    <span className="font-normal text-muted-foreground">
+                      — {group.length} address
+                      {group.length === 1 ? "" : "es"}
+                    </span>
+                  </p>
+                  <p className="mt-0.5 text-[11px] leading-4 text-muted-foreground">
+                    {copy.note}
+                  </p>
+                  <ul className="mt-1.5 space-y-1">
+                    {group.map(({ node }) => (
+                      <li
+                        key={node.address.toLowerCase()}
+                        className="flex flex-wrap items-center gap-x-2 gap-y-0.5"
+                      >
+                        <AddressChip value={node.address} chain={node.chain} />
+                        {onSelectNode ? (
+                          <Button
+                            size="xs"
+                            variant="ghost"
+                            onClick={() => onSelectNode(node)}
+                            title="Opens this address in the graph"
+                          >
+                            Show in graph
+                          </Button>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ul>
+                </li>
+              );
+            })}
+          </ul>
+        ) : null}
+      </Disclosure>
+    </div>
   );
 }
 

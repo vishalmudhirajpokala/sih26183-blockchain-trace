@@ -549,6 +549,13 @@ class TraceMetadata:
     # as though the address format had proved it, and a network that could not
     # be checked is visible as uncertain rather than empty.
     chain_resolution: Optional[dict] = None
+    # Per-address flow shape and the investigative steps the shapes suggest. Both
+    # are derived from the transfers in this result, so they are reproducible and
+    # are stored with it. Kept under metadata rather than at the top level of the
+    # result so the result's own key set -- which the multi-chain shape test
+    # asserts exactly -- does not change.
+    flow_shapes: Dict[str, Any] = field(default_factory=dict)
+    recommendations: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -565,6 +572,8 @@ class TraceMetadata:
             "truncated": self.truncated,
             "truncation_reasons": self.truncation_reasons,
             "chain_resolution": self.chain_resolution,
+            "flow_shapes": self.flow_shapes,
+            "recommendations": self.recommendations,
         }
 
     @classmethod
@@ -584,6 +593,8 @@ class TraceMetadata:
             truncated=bool(data.get("truncated")),
             truncation_reasons=list(data.get("truncation_reasons") or []),
             chain_resolution=data.get("chain_resolution"),
+            flow_shapes=data.get("flow_shapes") or {},
+            recommendations=data.get("recommendations") or [],
         )
 
 

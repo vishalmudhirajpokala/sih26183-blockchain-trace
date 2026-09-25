@@ -1300,6 +1300,54 @@ def _config_summary() -> Dict[str, Any]:
             "max_txs_per_node": backend_config.MAX_TXS_PER_NODE,
             "deadline_seconds": backend_config.TRACE_DEADLINE_SECONDS,
         },
+        # Entity-intelligence tiers, reported because which tier is populated
+        # decides what the platform can honestly claim.
+        #
+        # The curated tier is the only one that can NAME a VASP, and it is empty
+        # until an operator points BLOCKTRACE_ENTITY_DB at a licensed dataset
+        # (TRM, Chainalysis, Arkham) or a published exchange disclosure. Saying
+        # so here is the difference between "VASP attribution is deployed and
+        # unpopulated" and "VASP attribution is silently returning nothing",
+        # which is what it looked like before.
+        "entity_intelligence": _entity_intel_summary(),
+    }
+
+
+def _entity_intel_summary() -> dict:
+    """What each attribution tier can currently contribute."""
+    from services.entity_service import curated_status
+
+    try:
+        curated = curated_status()
+        curated_count = int(curated.get("count") or 0)
+    except Exception:  # noqa: BLE001
+        curated, curated_count = {"error": "unreadable"}, 0
+
+    from services.flow_intel import FAN_THRESHOLD
+
+    return {
+        # Can a VASP be named? Only from a curated record.
+        "curated_vasp_tier": {
+            "populated": curated_count > 0,
+            "count": curated_count,
+            "path": curated.get("path"),
+            "error": curated.get("error"),
+            "note": (
+                "Names the operator of an address. Populate BLOCKTRACE_ENTITY_DB "
+                "from a licensed VASP dataset to enable naming."
+                if curated_count == 0
+                else "Curated VASP labels available."
+            ),
+        },
+        # Can a VASP be *located*? Yes, from flow behaviour, with no dataset.
+        "flow_shape_tier": {
+            "available": True,
+            "fan_threshold": FAN_THRESHOLD,
+            "note": (
+                "Locates exchange-shaped, collection and cash-out addresses from "
+                "observed transaction flow. Does not name any operator."
+            ),
+        },
     }
 
 
