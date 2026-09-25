@@ -1290,6 +1290,16 @@ def _config_summary() -> Dict[str, Any]:
         "etherscan": bool(backend_config.ETHERSCAN_API_KEY),
         "supabase": backend_config.has_supabase(),
         "mempool_space": True,
+        # The investigation budget the trace engine applies when a request does
+        # not override it. The trace console reads these to label its advanced
+        # fields with the value actually in force, so the UI never has to
+        # hard-code a "recommended" number that could disagree with the engine.
+        "trace_defaults": {
+            "max_depth": backend_config.MAX_TRACE_DEPTH,
+            "max_nodes": backend_config.MAX_TRACE_NODES,
+            "max_txs_per_node": backend_config.MAX_TXS_PER_NODE,
+            "deadline_seconds": backend_config.TRACE_DEADLINE_SECONDS,
+        },
     }
 
 

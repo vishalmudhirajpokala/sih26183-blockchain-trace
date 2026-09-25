@@ -61,12 +61,28 @@ import { CHAIN_ORDER, chainLabel, statusInfo, truncateHash } from "@/lib/format"
 /** How long to wait after the last keystroke before asking the detector. */
 const DETECT_DEBOUNCE_MS = 320;
 
-const DEFAULTS = {
-  max_depth: 2,
-  max_nodes: 25,
-  max_txs_per_node: 10,
-  deadline_seconds: 90,
-};
+/**
+ * Investigation budget overrides.
+ *
+ * Intentionally empty. `POST /trace/run` takes `max_depth`, `max_nodes`,
+ * `max_txs_per_node` and `deadline_seconds` as *optional* fields, and the
+ * orchestrator substitutes the engine's own values whenever they are absent:
+ *
+ *   depth    = MAX_TRACE_DEPTH      if max_depth       is None else ...
+ *   node_cap = MAX_TRACE_NODES      if max_nodes       is None else ...
+ *   tx_cap   = MAX_TXS_PER_NODE     if max_txs_per_node is None else ...
+ *   deadline = TRACE_DEADLINE_SECONDS if deadline_seconds is None else ...
+ *
+ * This used to seed `{depth: 2, nodes: 25, txs: 10, deadline: 90}`, which
+ * meant every ordinary trace overrode the engine. That was not cosmetic: the
+ * `10` doubled the per-address history the backend had deliberately capped at
+ * `5`, and was enough to push a routine wallet trace past its time budget and
+ * return `504`. Leaving these blank means BlockTrace picks, the user does not.
+ *
+ * A field is only added to the request body once someone types into it under
+ * Advanced options, so an override is always deliberate and never accidental.
+ */
+const DEFAULTS = {};
 
 /**
  * The detection result, rendered as a statement about the input.
@@ -185,36 +201,79 @@ function DetectionCard({ detection, checking, onPickChain }) {
   );
 }
 
-/** The run controls, collapsed by default. */
-function AdvancedOptions({ options, setOptions, disabled }) {
+/**
+ * The investigation budget, collapsed by default and never required.
+ *
+ * A blank field means "BlockTrace decides", and the hint beside it states the
+ * value the engine will actually use, read from `/health` rather than guessed
+ * here. These exist for an investigator who needs a wider or tighter run than
+ * the default; nobody should have to open them to trace a wallet.
+ */
+function AdvancedOptions({ options, setOptions, disabled, recommended }) {
   const fields = [
-    { key: "max_depth", label: "Hop depth", min: 0, max: 6, hint: "How many transactions away from the seed to follow." },
-    { key: "max_nodes", label: "Max addresses", min: 1, max: 200, hint: "Ceiling on addresses in the graph." },
-    { key: "max_txs_per_node", label: "Tx per address", min: 1, max: 50, hint: "How much history to pull for each address." },
-    { key: "deadline_seconds", label: "Time budget (s)", min: 5, max: 300, hint: "Total wall-clock the trace may take." },
+    {
+      key: "max_depth",
+      label: "Investigation distance",
+      min: 0,
+      max: 6,
+      hint: "How many transfers away from the starting address to follow.",
+    },
+    {
+      key: "max_nodes",
+      label: "Maximum addresses to investigate",
+      min: 1,
+      max: 200,
+      hint: "A ceiling on how many addresses end up in the graph.",
+    },
+    {
+      key: "max_txs_per_node",
+      label: "Transaction history per address",
+      min: 1,
+      max: 50,
+      hint: "How much history to pull for each address.",
+    },
+    {
+      key: "deadline_seconds",
+      label: "Maximum investigation time (seconds)",
+      min: 5,
+      max: 300,
+      hint: "The longest BlockTrace will spend on this investigation.",
+    },
   ];
 
   return (
     <div className="grid gap-3 sm:grid-cols-2">
-      {fields.map((f) => (
-        <div key={f.key} className="space-y-1.5">
-          <Label htmlFor={f.key} className="text-xs">
-            {f.label}
-          </Label>
-          <Input
-            id={f.key}
-            type="number"
-            min={f.min}
-            max={f.max}
-            disabled={disabled}
-            value={options[f.key]}
-            onChange={(e) =>
-              setOptions((prev) => ({ ...prev, [f.key]: e.target.value }))
-            }
-          />
-          <p className="text-[10px] leading-4 text-muted-foreground">{f.hint}</p>
-        </div>
-      ))}
+      {fields.map((f) => {
+        const suggested = recommended?.[f.key];
+        return (
+          <div key={f.key} className="space-y-1.5">
+            <Label htmlFor={f.key} className="text-xs">
+              {f.label}
+            </Label>
+            <Input
+              id={f.key}
+              type="number"
+              min={f.min}
+              max={f.max}
+              disabled={disabled}
+              placeholder={suggested !== undefined ? String(suggested) : "Automatic"}
+              value={options[f.key] ?? ""}
+              onChange={(e) =>
+                setOptions((prev) => ({ ...prev, [f.key]: e.target.value }))
+              }
+            />
+            <p className="text-[10px] leading-4 text-muted-foreground">
+              {f.hint}{" "}
+              {suggested !== undefined ? (
+                <span className="opacity-80">
+                  Leave blank to use {suggested}
+                  {f.key === "deadline_seconds" ? " seconds" : ""}.
+                </span>
+              ) : null}
+            </p>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -378,6 +437,7 @@ export default function TraceConsole() {
   const [running, setRunning] = useState(false);
   const [error, setError] = useState(null);
   const [response, setResponse] = useState(null);
+  const [recommended, setRecommended] = useState(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   // A ref, not state: the abort controller must be readable from the cleanup of
@@ -420,6 +480,30 @@ export default function TraceConsole() {
 
   useEffect(() => () => detectAbort.current?.abort(), []);
 
+  /*
+   * The investigation budget the engine will use, read from the API rather
+   * than repeated here.
+   *
+   * This exists only so Advanced options can say "leave blank to use 3" instead
+   * of asking someone to guess. A failure is not worth an error state: the
+   * panel then simply falls back to "Automatic" and the trace still runs on the
+   * backend's own defaults, which is the behaviour that matters.
+   */
+  useEffect(() => {
+    let live = true;
+    api
+      .health()
+      .then((health) => {
+        if (live && health?.config?.trace_defaults) {
+          setRecommended(health.config.trace_defaults);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
+
   // Keep the URL in step with the input, so a trace is linkable before it has
   // been run and a refresh does not silently clear the console.
   useEffect(() => {
@@ -431,7 +515,17 @@ export default function TraceConsole() {
 
   // -- run ---------------------------------------------------------------
   const ambiguous = Boolean(detection?.ambiguous);
-  const canRun = Boolean(query.trim().length >= 8) && !ambiguous && !running;
+  /*
+   * Three reasons not to run: nothing worth sending, a network the detector
+   * could not resolve, and an input the detector has already rejected.
+   *
+   * The third only applies once detection has actually answered
+   * (`detection?.valid === false`), so an in-flight or absent check never
+   * blocks someone who pasted something valid. Letting an unrecognised input
+   * through would only earn a 400 from the backend.
+   */
+  const rejected = detection?.valid === false;
+  const canRun = Boolean(query.trim().length >= 8) && !ambiguous && !rejected && !running;
 
   async function handleRun(event) {
     event.preventDefault();
@@ -448,9 +542,16 @@ export default function TraceConsole() {
       };
       if (title.trim()) body.title = title.trim();
 
+      /*
+       * Only a deliberate override is sent. A blank Advanced field is omitted
+       * from the body entirely, which is what tells the backend to apply its
+       * own budget rather than have the console pick one.
+       */
       for (const key of ["max_depth", "max_nodes", "max_txs_per_node", "deadline_seconds"]) {
-        const parsed = Number(options[key]);
-        if (Number.isFinite(parsed) && String(parsed) !== "") body[key] = parsed;
+        const raw = options[key];
+        if (raw === undefined || raw === null || String(raw).trim() === "") continue;
+        const parsed = Number(raw);
+        if (Number.isFinite(parsed)) body[key] = parsed;
       }
 
       const result = await api.runTrace(body);
@@ -492,7 +593,7 @@ export default function TraceConsole() {
       <PageHeader
         eyebrow="Trace console"
         title="Trace a wallet or transaction"
-        description="Paste an address or a transaction hash. BlockTrace identifies the chain, normalizes what the providers return into one shape, and records which provider said what."
+        description="Paste an address or a transaction hash. BlockTrace works out which network it belongs to, follows the money through the providers, and records what it could and could not confirm."
       />
 
       <form onSubmit={handleRun} className="space-y-4">
@@ -509,7 +610,7 @@ export default function TraceConsole() {
                 spellCheck={false}
                 className="font-mono"
               />
-              <Button type="submit" disabled={!canRun} className="shrink-0 sm:w-36">
+              <Button type="submit" disabled={!canRun} className="shrink-0 sm:w-32">
                 {running ? (
                   <>
                     <Loader2Icon className="animate-spin" />
@@ -518,7 +619,7 @@ export default function TraceConsole() {
                 ) : (
                   <>
                     <PlayIcon />
-                    Run trace
+                    Trace
                   </>
                 )}
               </Button>
@@ -531,38 +632,44 @@ export default function TraceConsole() {
             onPickChain={setChain}
           />
 
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div className="space-y-1.5">
-              <Label htmlFor="chain">Chain</Label>
-              {/* `null` is Base UI's "no value chosen" state. An empty string
-                  would instead be a value no item has, which renders as a
-                  selection that does not exist. */}
-              <Select value={chain || null} onValueChange={(v) => setChain(v ?? "")}>
-                <SelectTrigger id="chain" className="w-full">
-                  <SelectValue placeholder="Detect from the input" />
-                </SelectTrigger>
-                <SelectContent>
-                  {CHAIN_ORDER.map((c) => (
-                    <SelectItem key={c} value={c}>
-                      {chainLabel(c)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <p className="text-[10px] leading-4 text-muted-foreground">
-                {ambiguous
-                  ? "Required here: this input is valid on several chains."
-                  : "Leave on detect unless you want to pin it."}
-              </p>
+          {/*
+            The chain is detected, not chosen. The only time a person has to
+            pick is when the input is genuinely valid on several chains -- a
+            0x-prefixed address is legal on Ethereum, BSC and Polygon at once --
+            because those are three different investigations. `preferred_chain`
+            is still sent when it is set, so pinning remains possible.
+          */}
+          {ambiguous ? (
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label htmlFor="chain">Network</Label>
+                <Select value={chain || null} onValueChange={(v) => setChain(v ?? "")}>
+                  <SelectTrigger id="chain" className="w-full">
+                    <SelectValue placeholder="Choose a network" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {CHAIN_ORDER.map((c) => (
+                      <SelectItem key={c} value={c}>
+                        {chainLabel(c)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-[10px] leading-4 text-muted-foreground">
+                  BlockTrace could not tell which network this belongs to.
+                </p>
+              </div>
             </div>
+          ) : null}
 
+          <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label htmlFor="title">Case name (optional)</Label>
               <Input
                 id="title"
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
-                placeholder="e.g. Case 2026-014 — mixer follow"
+                placeholder="e.g. Mixer follow — first hop"
                 maxLength={200}
               />
               <p className="text-[10px] leading-4 text-muted-foreground">
@@ -595,18 +702,26 @@ export default function TraceConsole() {
               size="sm"
               variant="ghost"
               onClick={() => setShowAdvanced((v) => !v)}
+              aria-expanded={showAdvanced}
             >
-              {showAdvanced ? "Hide" : "Show"} run limits
+              {showAdvanced ? "Hide advanced options" : "Advanced options"}
             </Button>
           </div>
 
           {showAdvanced ? (
             <div className="rounded-md border border-dashed bg-muted/30 p-3">
-              <AdvancedOptions options={options} setOptions={setOptions} disabled={running} />
+              <p className="mb-3 text-xs font-medium">Investigation settings</p>
+              <AdvancedOptions
+                options={options}
+                setOptions={setOptions}
+                disabled={running}
+                recommended={recommended}
+              />
               <p className="mt-3 text-[10px] leading-4 text-muted-foreground">
-                Limits bound the run so a wide investigation cannot spend an
-                unbounded number of provider calls. They are recorded in the
-                result, and anything dropped by them is marked as truncated.
+                Leave these blank and BlockTrace picks a safe budget for you.
+                Changing them widens or narrows how far the investigation goes;
+                anything a limit cuts off is reported as truncated in the result,
+                never quietly dropped.
               </p>
             </div>
           ) : null}
