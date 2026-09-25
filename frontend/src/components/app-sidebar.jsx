@@ -1,17 +1,17 @@
-/**
+﻿/**
  * The application sidebar.
  *
  * Two things were wrong with the scaffold and both are RULE 5 violations:
  *
  * 1. Every nav item pointed at `#`.
- * 2. The footer read "TRON NETWORK / Mainnet · Live data" with a green dot,
+ * 2. The footer read "TRON NETWORK / Mainnet Â· Live data" with a green dot,
  *    hard-coded. It was not a measurement of anything. It was a decoration
  *    asserting that a live multi-chain tool was connected to one specific
  *    network, which is both false (it is multi-chain) and unfalsifiable (it
  *    could never notice the API going down).
  *
  * The footer now states the one thing this component can actually know from
- * auth state — the deployment's access mode — and links to the network
+ * auth state â€” the deployment's access mode â€” and links to the network
  * explorer for anything about chain health. Real chain status is fetched live
  * on that page and is shown as unavailable when it is unavailable.
  */
@@ -93,7 +93,7 @@ function ChainStrip() {
   if (failed || !chains) {
     return (
       <p className="text-[10px] text-slate-500">
-        {failed ? "Chain list unavailable" : "Reading chain list…"}
+        {failed ? "Chain list unavailable" : "Reading chain listâ€¦"}
       </p>
     );
   }
@@ -125,10 +125,10 @@ export function AppSidebar({ ...props }) {
       ? "SIGNED IN"
       : status?.mode === "locked"
         ? "LOCKED"
-        : "READING…";
+        : "READINGâ€¦";
 
   const modeDetail = isDemo
-    ? "Open access — not private"
+    ? "Open access â€” not private"
     : isAuthenticated
       ? "Cases are scoped to your account"
       : status?.mode === "locked"
@@ -189,3 +189,5 @@ export function AppSidebar({ ...props }) {
     </Sidebar>
   );
 }
+
+

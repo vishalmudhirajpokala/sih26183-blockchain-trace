@@ -1,5 +1,5 @@
-/**
- * Dashboard — the investigation overview.
+﻿/**
+ * Dashboard â€” the investigation overview.
  *
  * Every number is either read from `/analytics/overview` and `/analytics/risk-trend`
  * or explicitly shown as unavailable. No fabricated counts, no "live" metrics
@@ -111,7 +111,7 @@ export default function Dashboard() {
     <div className="space-y-8 px-6 py-8">
       <PageHeader
         eyebrow="Overview"
-        title="Dashboard"
+        title="Blockchain Intelligence Dashboard"
         description={
           basis.note ||
           "Statistics over the investigations you have saved. These describe your own cases, not the chain as a whole."
@@ -126,7 +126,7 @@ export default function Dashboard() {
 
       {isDemo ? (
         <Badge variant="outline" className="border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
-          Demo mode — cases are not isolated between users.
+          Demo mode â€” cases are not isolated between users.
         </Badge>
       ) : null}
 
@@ -159,7 +159,7 @@ export default function Dashboard() {
       </div>
 
       <div className="grid gap-6 lg:grid-cols-[2fr_1fr]">
-        <SectionCard title="Risk score distribution" description="Over saved investigations — not over the chain.">
+        <SectionCard title="Risk score distribution" description="Over saved investigations â€” not over the chain.">
           {levelData.length > 0 ? (
             <div className="h-64">
               <ResponsiveContainer width="100%" height="100%">
@@ -258,7 +258,7 @@ export default function Dashboard() {
                         </div>
                       </div>
                       <div className="text-xs text-muted-foreground whitespace-nowrap">
-                        {inv.created_at ? formatDateTime(inv.created_at) : "—"}
+                        {inv.created_at ? formatDateTime(inv.created_at) : "â€”"}
                       </div>
                     </Link>
                   </li>
@@ -291,3 +291,4 @@ export default function Dashboard() {
     </div>
   );
 }
+

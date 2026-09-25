@@ -1,4 +1,4 @@
-/**
+﻿/**
  * The application header.
  *
  * The scaffold hard-coded the title "Documents" on every page, including the
@@ -21,7 +21,7 @@ import { ROUTE_TITLES } from "@/routes";
  * The breadcrumb trail for the current path.
  *
  * Derived rather than stored on each page so a deep link that was never
- * navigated to — a bookmark, a shared URL — still gets a correct trail.
+ * navigated to â€” a bookmark, a shared URL â€” still gets a correct trail.
  */
 function crumbsFor(pathname) {
   const segments = String(pathname || "")
@@ -105,3 +105,5 @@ export function SiteHeader() {
     </header>
   );
 }
+
+
