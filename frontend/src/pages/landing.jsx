@@ -240,14 +240,23 @@ export default function Landing() {
               <p className="mt-4 text-xs text-muted-foreground">{access.detail}</p>
             </div>
 
-            {/* The scene's host. It needs an explicit height, not just
-                `relative`: the scene inside is absolutely positioned so it
-                contributes nothing to layout, and in an `items-center` grid
-                column an otherwise-empty box collapses to zero. Measured at
-                0x0 before this height was set, which renders a perfectly
-                working scene into a space that does not exist. */}
+            {/* The scene's host.
+                Two things had to be right here, and both were measured rather
+                than eyeballed.
+
+                It needs a real box: the scene inside is absolutely positioned,
+                so it contributes nothing to layout, and an otherwise-empty box
+                in an items-center grid column collapses to 0x0 -- a working
+                scene rendered into a space that did not exist.
+
+                It needs the right *shape*. The Spline viewer sets its canvas to
+                `height: 100%` with no aspect preservation, so the scene simply
+                fills whatever box it is given: a wide, short box shows more
+                horizontally and less vertically, which crops tall content. At
+                945x340 the coins were cut off. 4:5 is portrait enough to hold
+                them and still fits beside the copy. */}
             <div
-              className="relative hidden h-[340px] lg:block lg:h-[400px] xl:h-[480px]"
+              className="relative hidden lg:block lg:aspect-[4/5]"
               aria-hidden="true"
             >
               <HeroScene />
