@@ -56,6 +56,7 @@ import { FundFlowGraph } from "@/components/fund-flow-graph";
 import { TransactionTable } from "@/components/transaction-table";
 import { RiskPanel } from "@/components/risk-panel";
 import { api, reportHref } from "@/lib/api";
+import { EXAMPLE_TRACES, shortAddress } from "@/lib/example-traces";
 import { CHAIN_ORDER, chainLabel, statusInfo, truncateHash } from "@/lib/format";
 
 /** How long to wait after the last keystroke before asking the detector. */
@@ -552,20 +553,40 @@ export default function TraceConsole() {
   const rejected = detection?.valid === false;
   const canRun = Boolean(query.trim().length >= 8) && !rejected && !running;
 
-  async function handleRun(event) {
-    event.preventDefault();
-    if (!canRun) return;
+  /*
+   * `preset` lets the example buttons start a trace directly.
+   *
+   * It has to arrive as an argument rather than being read back off `query`,
+   * because `setQuery` does not take effect until the next render: a handler
+   * that called `setQuery(address)` and then read `query` would post the empty
+   * string. Passing the address through keeps the click and the request in the
+   * same tick, while `setQuery` below still updates the field so the operator
+   * can see what was traced and edit from there.
+   */
+  async function handleRun(event, preset) {
+    event?.preventDefault();
+
+    const target = preset?.query ?? query.trim();
+    const targetChain = preset?.chain ?? chain;
+    if (running) return;
+    if (target.length < 8) return;
+
+    if (preset) {
+      setQuery(preset.query);
+      setChain(preset.chain);
+      setTitle("");
+    }
 
     setRunning(true);
     setError(null);
     try {
       const body = {
-        query: query.trim(),
-        preferred_chain: chain || null,
+        query: target,
+        preferred_chain: targetChain || null,
         save,
         generate_report: generateReport,
       };
-      if (title.trim()) body.title = title.trim();
+      if (!preset && title.trim()) body.title = title.trim();
 
       /*
        * Only a deliberate override is sent. A blank Advanced field is omitted
@@ -641,6 +662,79 @@ export default function TraceConsole() {
         description="Paste an address or a transaction hash. BlockTrace works out which network it belongs to, follows the money through the providers, and records what it could and could not confirm."
       />
 
+      {/*
+        The empty state for someone who has no address to paste.
+
+        Asking for a wallet address is a fair question to ask an investigator and
+        an unusable one to ask an evaluator, because the only people who can
+        answer it are people who already know what a wallet address is. So the
+        console offers three real ones, verifies what each one actually returns,
+        and says so in the caption.
+
+        They fill the field and start the trace themselves rather than running
+        anything on mount. A trace writes an investigation, spends real provider
+        quota and takes tens of seconds, so it has to be something a person
+        asked for. The click is the ask.
+
+        Every address here is a token contract. That is a deliberate choice, not
+        a shortcut -- see the reasoning in `lib/example-traces.js`.
+      */}
+      {!query.trim() && (
+        <SectionCard
+          title="No address to hand?"
+          bodyClassName="space-y-3"
+        >
+          <p className="text-xs leading-5 text-muted-foreground">
+            Start from one of these. They are real, public, permanently
+            verifiable addresses, and each one demonstrates something different.
+          </p>
+          <ul className="grid gap-2 sm:grid-cols-3">
+            {EXAMPLE_TRACES.map((example) => (
+              <li key={example.address}>
+                <button
+                  type="button"
+                  disabled={running}
+                  title={`${example.address} — ${chainLabel(example.chain)}`}
+                  onClick={(e) =>
+                    handleRun(e, {
+                      query: example.address,
+                      chain: example.chain,
+                    })
+                  }
+                  className="group flex h-full w-full flex-col gap-1.5 rounded-md border border-border bg-background p-3 text-left transition-colors hover:border-primary/60 hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--primary)] disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <span className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-semibold text-foreground">
+                      {example.label}
+                    </span>
+                    <span className="shrink-0 rounded border border-border px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-muted-foreground">
+                      {chainLabel(example.chain)}
+                    </span>
+                  </span>
+                  <span className="font-mono text-[10px] leading-4 text-muted-foreground break-all">
+                    {shortAddress(example.address)}
+                  </span>
+                  <span className="text-[10px] leading-4 text-muted-foreground">
+                    {example.shows}
+                  </span>
+                  {example.caveat && (
+                    <span className="mt-auto flex gap-1.5 border-t border-border pt-1.5 text-[9px] leading-3.5 text-muted-foreground/90">
+                      <InfoIcon className="mt-px size-2.5 shrink-0" />
+                      <span>{example.caveat}</span>
+                    </span>
+                  )}
+                </button>
+              </li>
+            ))}
+          </ul>
+          <p className="text-[10px] leading-4 text-muted-foreground">
+            These are token contracts, not personal wallets, so the high flow
+            numbers and risk scores they produce are a property of the
+            instrument rather than a finding about whoever issued it.
+          </p>
+        </SectionCard>
+      )}
+
       <form id="trace-form" onSubmit={handleRun} className="space-y-4">
         <SectionCard bodyClassName="space-y-4">
           <div className="space-y-2">
@@ -650,7 +744,7 @@ export default function TraceConsole() {
                 id="query"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Paste an address or a hash from any supported chain"
+                placeholder="Paste an address or transaction hash — T… (34), 0x… (42), or bc1…/1… for Bitcoin"
                 autoComplete="off"
                 spellCheck={false}
                 className="font-mono"
