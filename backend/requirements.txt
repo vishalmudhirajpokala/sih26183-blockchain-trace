@@ -3,3 +3,13 @@ uvicorn[standard]
 requests
 python-dotenv
 reportlab
+
+# Google sign-in, and account isolation, are both handled by Supabase.
+#
+# `services/auth.py` imports this inside `_supabase_anon()` rather than at module
+# scope, so a demo deployment with no SUPABASE_URL never needs it installed. That
+# is deliberate: an absent optional dependency must not stop a trace. It is
+# listed here because the moment Supabase *is* configured, the import has to
+# succeed, and a missing pin at that point would surface as a 503 on sign-in
+# rather than as an obviously absent package at install time.
+supabase

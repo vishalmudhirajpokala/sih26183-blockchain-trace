@@ -23,7 +23,15 @@
 
 import { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { AlertTriangle, ArrowRight, Info, KeyRound, Radar, ShieldCheck } from "lucide-react";
+import {
+  AlertTriangle,
+  ArrowRight,
+  Info,
+  KeyRound,
+  Loader2,
+  Radar,
+  ShieldCheck,
+} from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
@@ -61,20 +69,101 @@ function Field({ id, label, type, value, onChange, autoComplete, placeholder, di
   );
 }
 
+/**
+ * Google's four-colour mark, drawn inline.
+ *
+ * Inline rather than an image or an icon package: it is the only third-party
+ * brand in the product, it is four paths, and adding a dependency or an asset
+ * for it would be a worse trade than twenty lines of SVG. The colours are
+ * Google's own, and unlike the rest of this interface they cannot come from
+ * the theme, because a brand mark that changes colour with the theme stops
+ * being that brand's mark.
+ */
+function GoogleMark() {
+  return (
+    <svg
+      className="size-4 shrink-0"
+      viewBox="0 0 24 24"
+      role="img"
+      aria-label="Google"
+    >
+      <path
+        fill="#4285F4"
+        d="M23.49 12.27c0-.79-.07-1.54-.19-2.27H12v4.51h6.47a5.54 5.54 0 0 1-2.4 3.63v3.02h3.86c2.26-2.09 3.56-5.17 3.56-8.89Z"
+      />
+      <path
+        fill="#34A853"
+        d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.86-3.02c-1.08.72-2.45 1.16-4.07 1.16-3.13 0-5.78-2.11-6.73-4.96H1.28v3.13A11.99 11.99 0 0 0 12 24Z"
+      />
+      <path
+        fill="#FBBC05"
+        d="M5.27 14.27A7.2 7.2 0 0 1 4.9 12c0-.79.14-1.55.37-2.27V6.6H1.28A11.99 11.99 0 0 0 0 12c0 1.94.47 3.77 1.28 5.4l3.99-3.13Z"
+      />
+      <path
+        fill="#EA4335"
+        d="M12 4.77c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0A11.99 11.99 0 0 0 1.28 6.6l3.99 3.13C6.22 6.88 8.87 4.77 12 4.77Z"
+      />
+    </svg>
+  );
+}
+
 export default function Login() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { status, loading, login, signUp, refreshStatus } = useAuth();
+  const { status, loading, login, signUp, signInWithGoogle, refreshStatus } = useAuth();
 
   const [mode, setMode] = useState(MODES.signIn);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
+  const [googleBusy, setGoogleBusy] = useState(false);
   const [error, setError] = useState(null);
   const [notice, setNotice] = useState(null);
 
   // A bookmarked investigation survives the round trip through this page.
   const destination = location.state?.from || "/app";
+
+  /**
+   * Google sign-in.
+   *
+   * Google is the faster path for an investigator who already has an account,
+   * and it is the only path that does not ask this system to handle a password
+   * at all. Each failure gets its own message, because they are not the same
+   * problem: "not configured" is an operator's to fix, "cancelled" is the user's
+   * own doing and needs no error styling at all.
+   */
+  async function onGoogle() {
+    if (googleBusy) return;
+    setGoogleBusy(true);
+    setError(null);
+    try {
+      const result = await signInWithGoogle();
+      if (result.ok) return; // the page is navigating away
+      if (result.reason === "cancelled") {
+        setGoogleBusy(false);
+        return;
+      }
+      if (result.reason === "not_configured") {
+        setError({
+          kind: "unavailable",
+          detail:
+            "Google sign-in is not configured on this deployment. It needs " +
+            "VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY, and a Google provider " +
+            "enabled on that Supabase project. Use the form below, or open the app " +
+            "directly if it is running in demo mode.",
+        });
+      } else {
+        setError({ kind: "unavailable", detail: result.detail });
+      }
+    } catch (exc) {
+      setError({
+        kind: "unavailable",
+        detail: exc?.message || "Google sign-in could not be started.",
+      });
+    } finally {
+      setGoogleBusy(false);
+    }
+  }
 
   // The capability answer is authoritative about whether a form is even
   // meaningful, so the form follows it rather than the other way round.
@@ -270,6 +359,42 @@ export default function Login() {
                 : "Case data on this deployment is isolated per account."}
             </CardDescription>
           </CardHeader>
+
+          <CardContent>
+            {/*
+              Google first, because it is the shorter path and the only one that
+              never puts a password in this system. Styled from the same tokens
+              as every other control on this page, so it reads as part of the
+              product rather than a third-party widget; only the mark is Google's.
+
+              Above the form, not below it, because a user who already has a
+              Google account should never have to scroll to find the button.
+            */}
+            <Button
+              type="button"
+              variant="outline"
+              className="h-9 w-full gap-2"
+              onClick={onGoogle}
+              disabled={googleBusy || busy}
+            >
+              {googleBusy ? (
+                <Loader2
+                  className="size-4 animate-spin"
+                  data-icon="inline-start"
+                  aria-hidden="true"
+                />
+              ) : (
+                <GoogleMark />
+              )}
+              {googleBusy ? "Opening Google…" : "Continue with Google"}
+            </Button>
+
+            <div className="my-4 flex items-center gap-3">
+              <span className="h-px flex-1 bg-border" aria-hidden="true" />
+              <span className="text-xs text-muted-foreground">or use email</span>
+              <span className="h-px flex-1 bg-border" aria-hidden="true" />
+            </div>
+          </CardContent>
 
           <CardContent>
             {notice ? (

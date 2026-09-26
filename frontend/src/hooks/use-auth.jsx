@@ -20,6 +20,11 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 
 import { api, clearSession, readSession, writeSession } from "@/lib/api";
+import {
+  clearOAuthCallback as clearGoogleCallback,
+  readOAuthCallback as readGoogleCallback,
+  signInWithGoogle as googleSignIn,
+} from "@/lib/supabase";
 
 const ANONYMOUS_USER_ID = "00000000-0000-0000-0000-000000000000";
 const ANONYMOUS_EMAIL = "demo@blocktrace.local";
@@ -96,6 +101,59 @@ export function AuthProvider({ children }) {
     [refreshStatus],
   );
 
+  /**
+   * Sign in with Google through Supabase's OAuth handshake.
+   *
+   * Supabase returns a Supabase access token, which is the same credential the
+   * backend already verifies, so the session that lands here is
+   * indistinguishable from one produced by the email/password path. No new
+   * backend verification route was needed for that reason.
+   */
+  const signInWithGoogle = useCallback(async () => {
+    const result = await googleSignIn();
+    if (result.ok) {
+      // A full navigation, not a client-side push: the Google consent screen
+      // and the return trip are outside React's control.
+      window.location.assign(result.redirectTo);
+      return { ok: true };
+    }
+    return result;
+  }, []);
+
+  /**
+   * Collect a session Google just delivered, once, on mount.
+   *
+   * The tokens arrive in the URL hash. They are read, stored through the same
+   * path an email/password login uses, and then removed from the address bar so
+   * a refresh or a shared link does not replay them. Replay is harmless --
+   * they are the user's own tokens -- but a token sitting in a URL is a token
+   * in browser history, in a referrer header and in a screenshot.
+   */
+  const ingestOAuthCallback = useCallback(async () => {
+    const tokens = await readGoogleCallback();
+    if (!tokens) return null;
+    clearGoogleCallback();
+    setSession({ ...tokens, provider: "google" });
+    await refreshStatus();
+    return tokens;
+  }, [setSession, refreshStatus]);
+
+  /*
+   * Ingest a Google session on the way back from the consent screen.
+   *
+   * Mount-time rather than login-page-time on purpose: Supabase can deliver
+   * the callback to any URL in the redirect allowlist, and a user who follows
+   * a bookmark straight to /app should still end up signed in rather than
+   * looking at a route guard with a token in the address bar it never used.
+   *
+   * Declared below `ingestOAuthCallback` for a real reason, not style: a
+   * dependency array is evaluated during render, so an effect listed above the
+   * `const` that defines its own callback reads it in its temporal dead zone.
+   */
+  useEffect(() => {
+    ingestOAuthCallback();
+  }, [ingestOAuthCallback]);
+
   const logout = useCallback(async () => {
     try {
       const current = readSession();
@@ -155,11 +213,26 @@ export function AuthProvider({ children }) {
       canAccess,
       login,
       signUp,
+      signInWithGoogle,
+      ingestOAuthCallback,
       logout,
       refreshStatus,
       setSession,
     }),
-    [session, status, loading, user, canAccess, login, signUp, logout, refreshStatus, setSession],
+    [
+      session,
+      status,
+      loading,
+      user,
+      canAccess,
+      login,
+      signUp,
+      signInWithGoogle,
+      ingestOAuthCallback,
+      logout,
+      refreshStatus,
+      setSession,
+    ],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

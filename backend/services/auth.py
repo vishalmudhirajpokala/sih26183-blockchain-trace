@@ -144,6 +144,19 @@ def auth_status() -> Dict[str, Any]:
     return {
         "supabase_configured": config.has_supabase(),
         "signup_enabled": config.has_supabase() and not config.DEMO_MODE,
+        # Google sign-in is an OAuth handshake the browser runs against Supabase.
+        # Supabase returns a Supabase access token, which is the same credential
+        # `resolve_identity` already verifies, so this needs no new backend
+        # verification path and no Google client secret anywhere in this repo.
+        # The capability is therefore purely "is Supabase configured", and
+        # reporting it lets the login page explain the button rather than offer
+        # one that cannot work.
+        #
+        # Whether the Google *provider* is switched on inside a given Supabase
+        # project is not knowable here without a live call this endpoint must
+        # not make, so the frontend offers it when Supabase is configured and
+        # surfaces any provider-side rejection verbatim if Google is off.
+        "google_sign_in": config.has_supabase(),
         "demo_mode": config.DEMO_MODE,
         "mode": (
             "live" if config.has_supabase() and not config.DEMO_MODE
