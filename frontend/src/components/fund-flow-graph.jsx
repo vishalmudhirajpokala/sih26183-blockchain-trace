@@ -162,6 +162,17 @@ function edgeMidpoint(from, to) {
 const VIEW_W = 960;
 const VIEW_H = 520;
 
+/*
+ * Above this many edges meeting at one address, the individual value labels are
+ * replaced by a single aggregate.
+ *
+ * Eight is where a real trace stopped being readable: a hop-2 trace of the WETH
+ * contract produced 119 edges, and labelling each one put every string in a
+ * narrow band through the middle of the canvas. The threshold is about how many
+ * labels a reader can hold in view at once, not about the data.
+ */
+const EDGE_LABEL_MAX = 8;
+
 /** The centre of the viewport in client coordinates, for the +/- buttons. */
 function pointerCentre(svg) {
   if (!svg) return [0, 0];
@@ -208,6 +219,11 @@ function Graph2D({ nodes, edges, onSelect }) {
   }, [laidOut.positions, dragged]);
 
   const [hover, setHover] = useState(null);
+  // A clicked node stays focused after the pointer leaves, so a value label can
+  // be read without holding the mouse still over a nine-pixel target.
+  const [pinned, setPinned] = useState(null);
+  const [edgeHover, setEdgeHover] = useState(null);
+  const focusNode = hover || pinned;
 
   /*
    * The camera. A plain transform on one `<g>`, so the world stays larger than
@@ -274,6 +290,60 @@ function Graph2D({ nodes, edges, onSelect }) {
     }
     return { drawable: kept, undrawable: edges.length - kept.length };
   }, [edges, positions]);
+
+  /*
+   * How many transfers meet at each address, and what they add up to.
+   *
+   * A token contract or an exchange wallet can have dozens of edges meeting at
+   * one node. Drawing a value label on each of those puts a dozen labels inside
+   * the same few square centimetres, where they overlap into an unreadable
+   * block -- which is exactly what a real hop-2 trace produced. Past
+   * EDGE_LABEL_MAX the individual labels are replaced by a single aggregate on
+   * the node, which is also the more useful reading: "12 transfers, 45,200
+   * USDT" says something no individual edge label does.
+   *
+   * Only edges carrying a numeric amount are totalled. An edge with no amount
+   * is a contract call that moved nothing, and counting it in "12 transfers"
+   * while leaving it out of the total would read as an arithmetic error rather
+   * than as the filter it is -- so the two counts are reported separately.
+   */
+  const hubs = useMemo(() => {
+    const degree = new Map();
+    for (const { edge } of drawable) {
+      for (const side of ["from_address", "to_address"]) {
+        const at = edge[side];
+        if (!at) continue;
+        degree.set(at, (degree.get(at) ?? 0) + 1);
+      }
+    }
+
+    const totals = new Map();
+    for (const { edge } of drawable) {
+      for (const side of ["from_address", "to_address"]) {
+        const at = edge[side];
+        if (!at) continue;
+        if (!totals.has(at)) totals.set(at, { counted: 0, byAsset: new Map() });
+        const bucket = totals.get(at);
+        if (typeof edge.amount === "number" && Number.isFinite(edge.amount)) {
+          const asset = edge.asset || "?";
+          bucket.counted += 1;
+          bucket.byAsset.set(asset, (bucket.byAsset.get(asset) ?? 0) + edge.amount);
+        }
+      }
+    }
+
+    const aggregates = new Map();
+    for (const [address, count] of degree) {
+      if (count <= EDGE_LABEL_MAX) continue;
+      const bucket = totals.get(address) || { counted: 0, byAsset: new Map() };
+      aggregates.set(address, {
+        edges: count,
+        counted: bucket.counted,
+        byAsset: bucket.byAsset,
+      });
+    }
+    return { degree, aggregates };
+  }, [drawable]);
 
   /*
    * Wheel is bound imperatively rather than through `onWheel` on the element.
@@ -443,6 +513,33 @@ function Graph2D({ nodes, edges, onSelect }) {
             const flagged = (edge.risk_flags || []).length > 0;
             const mid = edgeMidpoint(from, to);
             const dimmed = hover && hover !== edge.from_address && hover !== edge.to_address;
+            /*
+             * A value label is drawn only while this edge is in focus.
+             *
+             * It used to be drawn always, at every edge midpoint, for every
+             * edge. At one or two transfers that is a helpful annotation. At
+             * 119 edges it is 119 overlapping strings in a band across the
+             * middle of the canvas, which is not a chart any more -- it is a
+             * grey smear with the occasional legible number in it, and the
+             * numbers that survive are the ones nearest the front of the draw
+             * order rather than the ones that matter.
+             *
+             * Focus is the edge under the pointer, or any edge touching the
+             * hovered or clicked node. A node that is a hub suppresses its own
+             * edges' labels in favour of the single aggregate, because the
+             * aggregate is drawn at the node and the individual labels would
+             * sit on top of it.
+             */
+            const touchesFocus = focusNode
+              ? edge.from_address === focusNode || edge.to_address === focusNode
+              : false;
+            const isHub = Boolean(
+              hubs.aggregates.get(edge.from_address) || hubs.aggregates.get(edge.to_address),
+            );
+            const showLabel =
+              edge.amount !== null &&
+              edge.amount !== undefined &&
+              (edgeHover === key || (touchesFocus && !isHub));
             return (
               <g key={key}>
                 <path
@@ -455,18 +552,23 @@ function Graph2D({ nodes, edges, onSelect }) {
                     flagged ? "url(#ff-arrow-flag)" : "url(#ff-arrow)"
                   }
                   color={flagged ? "#ef4444" : "#94a3b8"}
+                  onPointerEnter={() => setEdgeHover(key)}
+                  onPointerLeave={() => setEdgeHover((k) => (k === key ? null : k))}
                 >
                   <title>
                     {`${truncateHash(edge.from_address, 10, 8)} → ${truncateHash(edge.to_address, 10, 8)}\n${formatAmount(edge.amount, null, edge.asset)}\n${truncateHash(edge.transaction_hash, 12, 10)}${flagged ? `\nRisk flags: ${edge.risk_flags.join(", ")}` : ""}`}
                   </title>
                 </path>
-                {edge.amount !== null && edge.amount !== undefined ? (
+                {showLabel ? (
                   <text
                     x={mid.x}
                     y={mid.y}
                     textAnchor="middle"
-                    className="fill-muted-foreground text-[9px]"
-                    opacity={dimmed ? 0.15 : 0.9}
+                    className="fill-foreground text-[9px] font-medium"
+                    paintOrder="stroke"
+                    stroke="var(--background)"
+                    strokeWidth="2.5"
+                    strokeLinejoin="round"
                   >
                     {formatAmount(edge.amount, null, edge.asset)}
                   </text>
@@ -499,6 +601,7 @@ function Graph2D({ nodes, edges, onSelect }) {
                   // Only a click without a drag is a selection. A node that was
                   // dragged into place should not also open the details panel.
                   if (gesture.current?.moved) return;
+                  setPinned((p) => (p === node.address ? null : node.address));
                   onSelect?.(node);
                 }}
                 onPointerDown={(e) => onNodeDown(e, node.address)}
@@ -527,6 +630,59 @@ function Graph2D({ nodes, edges, onSelect }) {
                 >
                   {node.is_seed ? "subject" : entityTypeLabel(node.entity_type)}
                 </text>
+                {/*
+                  The aggregate for a hub. Drawn under the node's own labels and
+                  only while the node is in focus, so a busy address reads as one
+                  number rather than as thirty.
+                */}
+                {(() => {
+                  const agg = hubs.aggregates.get(node.address);
+                  if (!agg || focusNode !== node.address) return null;
+                  const noun = `${agg.edges} transfer${agg.edges === 1 ? "" : "s"}`;
+                  /*
+                   * Totals are per asset, never across assets.
+                   *
+                   * Summing a node's inbound and outbound flows into one number
+                   * is meaningless when more than one asset is involved, and it
+                   * is worse than meaningless because it looks like a real
+                   * figure: 5.179 "USDT" assembled from part ETH, part WETH and
+                   * part USDT is a number the reader will trust. So a single
+                   * asset is totalled directly, and several assets are listed
+                   * separately or not at all.
+                   */
+                  const assets = [...agg.byAsset.entries()].sort(
+                    (a, b) => b[1] - a[1],
+                  );
+                  let detail;
+                  if (assets.length === 1) {
+                    detail = `, total ${formatAmount(assets[0][1], null, assets[0][0])}`;
+                  } else if (assets.length > 1 && assets.length <= 3) {
+                    detail = ` — ${assets
+                      .map(([a, v]) => formatAmount(v, null, a))
+                      .join(", ")}`;
+                  } else if (assets.length > 3) {
+                    detail = ` across ${assets.length} assets`;
+                  } else {
+                    detail = "";
+                  }
+                  const unpriced = agg.edges - agg.counted;
+                  return (
+                    <text
+                      y={r + 36}
+                      textAnchor="middle"
+                      className="fill-foreground text-[9px] font-medium"
+                      paintOrder="stroke"
+                      stroke="var(--background)"
+                      strokeWidth="2.5"
+                      strokeLinejoin="round"
+                    >
+                      {`${noun}${detail}`}
+                      {unpriced > 0
+                        ? ` (${unpriced} with no recorded amount)`
+                        : ""}
+                    </text>
+                  );
+                })()}
                 <title>
                   {`${node.address}\n${node.is_seed ? "Subject of this investigation" : entityTypeLabel(node.entity_type)}\n${node.inbound} in / ${node.outbound} out\nDepth ${node.depth}`}
                 </title>

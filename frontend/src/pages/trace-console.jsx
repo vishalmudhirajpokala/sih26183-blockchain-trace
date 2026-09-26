@@ -410,10 +410,27 @@ function ResultPanel({ response, onReset }) {
   const durationMs = meta.duration_ms;
 
   // The entity is the best attribution found anywhere in the trace, which is
-  // usually a counterparty rather than the subject. Labelling it "destination"
-  // would be a stronger claim than the data supports, so the hero says what it
-  // actually is and the report's fuller treatment lives in the PDF.
+  // usually a counterparty rather than the subject.
+  //
+  // Whether it is the subject decides the wording, and getting that wrong in
+  // either direction is a real error: labelling a direct match "possibly not
+  // the address you traced" teaches a reader to distrust a finding that was
+  // confirmed, and calling a counterparty "the traced address" asserts
+  // something the data does not support. So it is decided by looking up which
+  // node in the graph actually carries the attribution, not by assuming.
   const entity = result.entity || null;
+  const entityNode = entity
+    ? (result.nodes || []).find(
+        (n) =>
+          n.entity &&
+          n.entity.name === entity.name &&
+          n.entity.type === entity.type &&
+          n.confidence === entity.confidence,
+      )
+    : null;
+  const entityIsSubject = entityNode
+    ? String(entityNode.address).toLowerCase() === String(result.seed || "").toLowerCase()
+    : false;
   const entityLabel = entity
     ? `${entity.name} — ${String(entity.type || "").replace(/_/g, " ")}`
     : "No entity identified";
@@ -489,10 +506,33 @@ function ResultPanel({ response, onReset }) {
               <span className="text-muted-foreground">{entityLabel}</span>
             )}
           </p>
-          {entity ? (
+          {/*
+            The hedge appears only when the attribution belongs to a
+            counterparty. When it is the traced address itself, "not necessarily
+            the traced address" is a caveat about a finding that was directly
+            confirmed, and hedging it is not caution -- it is the kind of noise
+            that makes a reader discount every caveat on the page, including the
+            ones that are load-bearing.
+
+            When the node carrying the attribution cannot be found at all, the
+            caveat is kept. Unknown is not the same as direct.
+          */}
+          {entity && !entityIsSubject ? (
             <p className="text-[10px] leading-4 text-muted-foreground">
-              Best attribution found anywhere in this trace, not necessarily the
-              traced address itself.
+              {entityNode ? (
+                <>
+                  Best attribution found anywhere in this trace. It belongs to{" "}
+                  <span className="font-mono">{entityNode.address}</span> at hop{" "}
+                  {entityNode.depth}, not to the traced address.
+                </>
+              ) : (
+                "Best attribution found anywhere in this trace. The address it belongs to could not be located in this graph, so it is not confirmed to be the traced address."
+              )}
+            </p>
+          ) : null}
+          {entity && entityIsSubject ? (
+            <p className="text-[10px] leading-4 text-muted-foreground">
+              This attribution belongs to the traced address itself.
             </p>
           ) : null}
         </div>
@@ -623,52 +663,78 @@ function ResultPanel({ response, onReset }) {
         <ProviderLedger usage={usage} />
       </Disclosure>
 
-      <SectionCard title="Provenance and method" bodyClassName="space-y-1 pt-2">
-        <ValueRow label="Investigation id" mono copyable>
-          {meta.investigation_id || response.investigation_id}
-        </ValueRow>
-        <ValueRow label="Seed input" mono copyable>
-          {result.seed}
-        </ValueRow>
-        <ValueRow label="Max depth reached">
-          {typeof meta.max_depth_reached === "number" ? meta.max_depth_reached : null}
-        </ValueRow>
-        <ValueRow label="Depth limit">
-          {typeof meta.depth_limit === "number" ? meta.depth_limit : null}
-        </ValueRow>
-        <ValueRow label="Addresses examined">
-          {typeof meta.nodes_examined === "number" ? meta.nodes_examined : null}
-        </ValueRow>
-        <ValueRow label="Transfers inspected">
-          {typeof meta.transactions_inspected === "number"
-            ? meta.transactions_inspected
-            : null}
-        </ValueRow>
-        <ValueRow label="Truncated">
-          {meta.truncated === undefined ? null : meta.truncated ? "Yes" : "No"}
-        </ValueRow>
-        {meta.subject_is_contract !== undefined ? (
-          <ValueRow label="Subject is a contract">
-            {meta.subject_is_contract === null
-              ? "Could not be determined"
-              : meta.subject_is_contract
-                ? "Yes"
-                : "No"}
+      {/*
+        Provenance is appendix material. It is the raw record of how the run was
+        produced -- investigation id, depth limits, byte counts -- and it is
+        genuinely necessary, because "how far did this actually go" is the
+        question that decides how much any of the above is worth. But it is not
+        a finding, and leaving it expanded put a bare UUID and four field names
+        at the same visual weight as the fund-flow graph directly above it.
+
+        Collapsed, with a summary that answers the question it exists to answer,
+        it reads as what it is: the method, available on demand.
+      */}
+      <Disclosure
+        label="Provenance and method"
+        hint={
+          meta.truncated
+            ? `truncated — depth ${meta.max_depth_reached ?? "?"} of ${meta.depth_limit ?? "?"}, ${
+                meta.nodes_examined ?? 0
+              } addresses, ${meta.transactions_inspected ?? 0} transfers`
+            : `${meta.nodes_examined ?? 0} addresses, ${
+                meta.transactions_inspected ?? 0
+              } transfers, depth ${meta.max_depth_reached ?? "?"} of ${
+                meta.depth_limit ?? "?"
+              }`
+        }
+      >
+        <div className="space-y-1">
+          <ValueRow label="Investigation id" mono copyable>
+            {meta.investigation_id || response.investigation_id}
           </ValueRow>
-        ) : null}
-        {/*
-          Chain-agnostic, and it has to be. This line used to say "TRON amounts
-          arrive already divided out of SUN by the adapter" unconditionally, so an
-          Ethereum trace explained TRON's unit convention to a reader looking at
-          an ERC-20 amount. The division is real on every chain; only the unit
-          named was chain-specific.
-        */}
-        <p className="pt-2 text-[10px] leading-4 text-muted-foreground">
-          Amounts are shown in each asset's own units, already converted by the
-          adapter from the raw on-chain integer using that token contract's
-          decimals. No conversion happens in the browser.
-        </p>
-      </SectionCard>
+          <ValueRow label="Seed input" mono copyable>
+            {result.seed}
+          </ValueRow>
+          <ValueRow label="Max depth reached">
+            {typeof meta.max_depth_reached === "number" ? meta.max_depth_reached : null}
+          </ValueRow>
+          <ValueRow label="Depth limit">
+            {typeof meta.depth_limit === "number" ? meta.depth_limit : null}
+          </ValueRow>
+          <ValueRow label="Addresses examined">
+            {typeof meta.nodes_examined === "number" ? meta.nodes_examined : null}
+          </ValueRow>
+          <ValueRow label="Transfers inspected">
+            {typeof meta.transactions_inspected === "number"
+              ? meta.transactions_inspected
+              : null}
+          </ValueRow>
+          <ValueRow label="Truncated">
+            {meta.truncated === undefined ? null : meta.truncated ? "Yes" : "No"}
+          </ValueRow>
+          {meta.subject_is_contract !== undefined ? (
+            <ValueRow label="Subject is a contract">
+              {meta.subject_is_contract === null
+                ? "Could not be determined"
+                : meta.subject_is_contract
+                  ? "Yes"
+                  : "No"}
+            </ValueRow>
+          ) : null}
+          {/*
+            Chain-agnostic, and it has to be. This line used to say "TRON amounts
+            arrive already divided out of SUN by the adapter" unconditionally, so an
+            Ethereum trace explained TRON's unit convention to a reader looking at
+            an ERC-20 amount. The division is real on every chain; only the unit
+            named was chain-specific.
+          */}
+          <p className="pt-2 text-[10px] leading-4 text-muted-foreground">
+            Amounts are shown in each asset's own units, already converted by the
+            adapter from the raw on-chain integer using that token contract's
+            decimals. No conversion happens in the browser.
+          </p>
+        </div>
+      </Disclosure>
     </div>
   );
 }
