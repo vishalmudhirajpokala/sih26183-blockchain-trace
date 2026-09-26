@@ -11,3 +11,25 @@ backend/test_report.pdf
 backend/tron_response.json
 backend/test_incoming.py
 backend/test_incoming_trc20.py
+
+# Scratch captured from provider APIs while working out chain detection, plus
+# the throwaway scripts that captured it. They were raw API responses named after
+# whatever chain was being probed (bt, bnb, bs, poly, rc1, rc56, rc137, tb, tt,
+# tx, reth) and a couple of captured error bodies. Nothing reads them, they carry
+# live timestamps rather than being reproducible fixtures, and at the repository
+# root they read to anyone opening the project as unexplained data files.
+# `_probe*.py` is covered too, so the next throwaway script does not land in git.
+_probe*.py
+/bt.json
+/bnb.json
+/bs.json
+/poly.json
+/bad2.json
+/rc1.json
+/rc56.json
+/rc137.json
+/reth.json
+/tb.json
+/tbb.json
+/tt.json
+/tx.json
