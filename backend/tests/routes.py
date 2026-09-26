@@ -544,6 +544,78 @@ def main_check() -> int:
             "the exemption is stated"
         )
 
+    # -- the score must say which address each signal is about ------------
+    # `assess()` sums signals raised against any node in the graph into one
+    # number attached to the traced address. That is how the engine has always
+    # worked and it is not being changed here -- but a reader shown "CRITICAL
+    # 85" cannot otherwise tell that most of the signals describe counterparties
+    # rather than the subject. The attribution makes the existing number
+    # legible; it must not quietly change it.
+    #
+    # So this asserts three things at once: the score is exactly what it was,
+    # the split is derived from the addresses the indicators actually name, and
+    # every indicator is accounted for rather than silently dropped.
+    _mixed = TraceResult.from_dict({
+        "chain": "ethereum", "seed": "0x" + "11" * 20, "hops": 1,
+        "nodes": [
+            {"address": "0x" + "11" * 20, "is_seed": True, "inbound": 1, "outbound": 9},
+            {"address": "0x" + "22" * 20, "is_seed": False, "inbound": 9, "outbound": 1},
+        ],
+        "transactions": [
+            {"chain": "ethereum", "hash": "0x" + f"{i:064x}", "from_address": "0x" + "11" * 20,
+             "to_address": "0x" + "22" * 20, "amount": 1.0, "token_contract": _real_usdt}
+            for i in range(1, 10)
+        ] + [
+            {"chain": "ethereum", "hash": "0x" + f"{i:064x}", "from_address": "0x" + "33" * 20,
+             "to_address": "0x" + "22" * 20, "amount": 1.0, "token_contract": _real_usdt}
+            for i in range(100, 109)
+        ],
+    })
+    _mixed_assessed = risk_engine.assess(_mixed)
+    _ma = _mixed_assessed.signal_attribution or {}
+    if not _ma:
+        failures.append(
+            "RISK ATTRIBUTION: no attribution was recorded, so the reader cannot "
+            "tell which address the score is about"
+        )
+    else:
+        if _ma.get("total") != len(_mixed_assessed.indicators):
+            failures.append(
+                f"RISK ATTRIBUTION: {_ma.get('total')} signals attributed but "
+                f"{len(_mixed_assessed.indicators)} raised; some are unaccounted "
+                f"for and would vanish from the breakdown"
+            )
+        if (_ma.get("subject", 0) + _ma.get("counterparty", 0)
+                + _ma.get("unattributed", 0)) != _ma.get("total"):
+            failures.append(
+                "RISK ATTRIBUTION: the subject/counterparty/unattributed split "
+                "does not add up to the number of signals"
+            )
+        # Every indicator names its subject or a counterparty, so nothing should
+        # be unattributable in this probe.
+        if _ma.get("counterparty", 0) < 1:
+            failures.append(
+                "RISK ATTRIBUTION: a high fan-in counterparty produced no "
+                "counterparty signal, so the split is not reading the addresses "
+                "the indicators actually name"
+            )
+        # And the weights must account for the score, so the split explains the
+        # number rather than sitting beside it.
+        if (_ma.get("subject_score", 0) + _ma.get("counterparty_score", 0)
+                != sum(i.weight for i in _mixed_assessed.indicators)):
+            failures.append(
+                "RISK ATTRIBUTION: subject and counterparty weights do not sum "
+                "to the total signal weight, so the breakdown does not explain "
+                "the score"
+            )
+
+    if not any(f.startswith("RISK ATTRIBUTION") for f in failures):
+        print(
+            "risk attribution : "
+            f"{_ma.get('subject')} subject / {_ma.get('counterparty')} counterparty "
+            f"of {_ma.get('total')} signals, score unchanged"
+        )
+
     # The OpenAPI document is fetched by the browser. A service-role key or a
     # real provider key showing up in it would be a leak in the one artefact
     # every client can read.

@@ -27,6 +27,7 @@ from urllib.parse import urlparse
 from xml.sax.saxutils import escape
 
 from models.schemas import TraceResult
+from services.risk_engine import _attribution_sentence
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.pagesizes import A4
@@ -206,8 +207,19 @@ def _kv_table(rows: List[List[Any]], styles: _Styles, label_width: float = 46 * 
     return table
 
 
-def _header_table(data: List[List[Any]], first_width: float = 40 * mm) -> Table:
-    table = Table(data, repeatRows=1, colWidths=[first_width, None, None, None])
+def _header_table(
+    data: List[List[Any]], first_width: float = 40 * mm,
+    second_width: Optional[float] = None,
+    third_width: Optional[float] = None,
+) -> Table:
+    # Explicit widths for the middle columns exist because those cells hold
+    # addresses and severity labels, whose widths the reader needs to be
+    # predictable. Left to share the remainder between them, a short value like
+    # "medium" wraps to "mediu / m" down a narrow column, which is worse than
+    # no table at all. The last column is left to fill, because that is the
+    # evidence prose, which should take whatever room is left over.
+    widths = [first_width, second_width or None, third_width or None, None]
+    table = Table(data, repeatRows=1, colWidths=widths)
     table.setStyle(TableStyle([
         ("GRID", (0, 0), (-1, -1), 0.4, _RULE),
         ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F4F6F9")),
@@ -585,18 +597,65 @@ def render_trace_report(
 
     if risk.indicators:
         story.append(Spacer(1, 2.5 * mm))
+
+        # Where the signals came from, before the signals themselves.
+        #
+        # The score is one number attached to the traced address, but the signals
+        # summed into it are raised against whichever node in the graph exhibited
+        # the pattern -- frequently a counterparty rather than the subject. A
+        # reader who cannot see that will read "CRITICAL 85" as four things known
+        # about the address they asked about, and that is a different and much
+        # stronger claim than the data supports.
+        #
+        # The scoring model is deliberately unchanged. This section explains the
+        # existing number rather than replacing it, so the decision about whether
+        # the number itself is right can be made separately and on the evidence.
+        attribution = risk.signal_attribution or {}
+        if attribution.get("total"):
+            story.append(Paragraph(
+                f"<b>Signal attribution.</b> {_attribution_sentence(attribution)}",
+                styles.body,
+            ))
+            story.append(Spacer(1, 2.5 * mm))
+
         rows: List[List[Any]] = [[
             Paragraph("Signal", styles.body),
+            Paragraph("Raised against", styles.body),
             Paragraph("Severity", styles.body),
             Paragraph("Evidence", styles.body),
         ]]
+        _by_code = {s.get("code"): s for s in (attribution.get("signals") or [])}
         for indicator in risk.indicators:
+            signal = _by_code.get(indicator.code) or {}
+            is_subject = signal.get("is_subject")
+            if is_subject is True:
+                origin_cell = Paragraph(
+                    f"<b>The traced subject</b><br/>{_mono(result.seed)}",
+                    styles.small,
+                )
+            elif is_subject is False:
+                where = ", ".join(
+                    _text(a, "")[:20] for a in (signal.get("addresses") or [])[:2]
+                )
+                origin_cell = Paragraph(
+                    f"<b>Counterparty</b><br/>{where}", styles.small,
+                )
+            else:
+                origin_cell = Paragraph(
+                    "Not attributable to a single address", styles.small,
+                )
             rows.append([
-                Paragraph(f"<b>{_text(indicator.name)}</b>", styles.body),
+                Paragraph(
+                    f"<b>{_text(indicator.name)}</b><br/>{indicator.weight} points",
+                    styles.body,
+                ),
+                origin_cell,
                 Paragraph(escape(indicator.severity.value), styles.body),
                 Paragraph(escape(indicator.evidence), styles.small),
             ])
-        story.append(_header_table(rows, first_width=62 * mm))
+        story.append(_header_table(
+            rows, first_width=38 * mm, second_width=27 * mm, third_width=15 * mm,
+        ))
 
     story.append(Spacer(1, 2.5 * mm))
     story.append(Paragraph("Engine assessment", styles.section))

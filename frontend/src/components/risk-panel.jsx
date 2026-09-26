@@ -67,7 +67,7 @@ const WEIGHT_NOTES = {
  * ledger -- off the first screen. So the reasoning is still present, still
  * attributed, and still one keystroke away, but it is not what you read first.
  */
-function Indicator({ indicator }) {
+function Indicator({ indicator, origin }) {
   const [showDetail, setShowDetail] = useState(false);
   const evidence = indicator.evidence;
   const hasDetail = Boolean(
@@ -85,6 +85,20 @@ function Indicator({ indicator }) {
         <span className="min-w-0 flex-1 text-sm font-medium">
           {indicator.name || indicator.code}
         </span>
+        {origin ? (
+          <span
+            className="shrink-0 rounded border border-border px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-muted-foreground"
+            title={
+              origin.is_subject
+                ? "Raised against the address you traced"
+                : `Raised against a counterparty: ${(origin.addresses || [])
+                    .slice(0, 2)
+                    .join(", ")}`
+            }
+          >
+            {origin.is_subject ? "Subject" : "Counterparty"}
+          </span>
+        ) : null}
         <span className="font-mono text-xs text-muted-foreground">
           +{indicator.weight}
         </span>
@@ -154,6 +168,17 @@ export function RiskPanel({ risk, className = "" }) {
     [assessment.indicators],
   );
   const breakdown = assessment.score_breakdown || {};
+  const attribution = useMemo(
+    () => assessment.signal_attribution || null,
+    [assessment.signal_attribution],
+  );
+  // Indicators are collapsed by code upstream, so a code is a safe key here.
+  // Anything without a match simply gets no badge rather than a wrong one.
+  const signalByCode = useMemo(() => {
+    const map = {};
+    for (const s of attribution?.signals || []) map[s.code] = s;
+    return map;
+  }, [attribution]);
   const level = assessment.risk_level;
   const score = typeof assessment.risk_score === "number" ? assessment.risk_score : null;
   const tone = riskTone(level);
@@ -234,9 +259,43 @@ export function RiskPanel({ risk, className = "" }) {
               ? "1 indicator detected"
               : `${indicators.length} indicators detected`}
           </h3>
+
+          {/*
+            Which address each signal is about.
+
+            The score is one number attached to the traced address, but the
+            signals in it are raised against whichever node in the graph showed
+            the pattern, and that is often a counterparty. Shown here rather than
+            buried because a reader who sees "CRITICAL 85" and cannot see where
+            the signals came from will read it as four things known about the
+            address they asked about -- a considerably stronger claim than the
+            data supports. The scoring model is unchanged; this only makes the
+            existing number legible.
+          */}
+          {attribution && attribution.total > 0 && attribution.counterparty > 0 ? (
+            <p className="mt-1.5 rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs leading-5">
+              <span className="font-medium">
+                {attribution.counterparty} of {attribution.total} signals
+              </span>{" "}
+              were raised against counterparty addresses, not the traced
+              subject
+              {attribution.subject > 0 ? (
+                <>
+                  {" "}({attribution.subject} concerned the subject itself)
+                </>
+              ) : null}
+              . The score is an aggregate across the traced graph, so it is not a
+              finding about the subject address on its own.
+            </p>
+          ) : null}
+
           <ul className="mt-2 space-y-1.5">
             {indicators.map((ind, i) => (
-              <Indicator key={`${ind.code}-${i}`} indicator={ind} />
+              <Indicator
+                key={`${ind.code}-${i}`}
+                indicator={ind}
+                origin={signalByCode?.[ind.code]}
+              />
             ))}
           </ul>
         </div>

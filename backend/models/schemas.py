@@ -497,6 +497,20 @@ class RiskAssessment:
     indicators: List[RiskIndicator] = field(default_factory=list)
     assessment: str = ""
     score_breakdown: Dict[str, int] = field(default_factory=dict)
+    # Which address each signal was raised against, and whether that address is
+    # the subject of the trace.
+    #
+    # The score is a single number for the traced address, but the signals in it
+    # are not all about the traced address: a fan-in signal fires against whichever
+    # node in the graph consolidated value, which is frequently a counterparty.
+    # That is a deliberate consequence of how the engine has always worked, and
+    # this field does not change it -- it makes the existing number legible, so a
+    # reader can see that "CRITICAL 85" is four signals about four different
+    # addresses rather than four things known about the one they asked about.
+    #
+    # Shape: {"subject": int, "counterparty": int, "total": int,
+    #         "signals": [{"code", "name", "weight", "is_subject", "addresses": [...]}]}
+    signal_attribution: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -506,6 +520,7 @@ class RiskAssessment:
             "indicator_names": [i.name for i in self.indicators],
             "assessment": self.assessment,
             "score_breakdown": self.score_breakdown,
+            "signal_attribution": self.signal_attribution,
         }
 
     @classmethod
@@ -517,6 +532,7 @@ class RiskAssessment:
             indicators=[RiskIndicator.from_dict(i) for i in (data.get("indicators") or [])],
             assessment=data.get("assessment", ""),
             score_breakdown=dict(data.get("score_breakdown") or {}),
+            signal_attribution=dict(data.get("signal_attribution") or {}),
         )
 
 

@@ -407,6 +407,109 @@ def _level_for(score: int, indicators: List[RiskIndicator]) -> RiskLevel:
     return RiskLevel.LOW
 
 
+def _attribute_signals(
+    result: TraceResult, indicators: List[RiskIndicator],
+) -> Dict[str, Any]:
+    """
+    Record which address each signal was raised against.
+
+    The risk score is a single number attached to the traced address, but the
+    signals summed into it are not all about the traced address. A fan-in signal
+    fires against whichever node consolidated value, a rapid-movement signal
+    against whichever address moved twice inside the window, and in a real trace
+    those are usually counterparties. A reader shown "CRITICAL 85" has no way to
+    know that three of the four signals describe wallets the subject traded
+    with, rather than the subject itself.
+
+    This does not change the score -- the weighting is untouched and the total is
+    still what it was. It records the provenance of each signal so the number can
+    be read for what it is. That distinction has to come from the data rather
+    than from a label, so an indicator counts as being about the subject only
+    when the subject is actually among the addresses it names.
+    """
+    seed = (result.seed or "").lower()
+    signals: List[Dict[str, Any]] = []
+    subject = counterparty = 0
+
+    for indicator in indicators:
+        addresses = list(indicator.related_addresses or [])
+        names = {a.lower() for a in addresses if a}
+        # An indicator that names no address cannot be attributed either way.
+        # It is counted as unattributed rather than guessed onto the subject,
+        # because attributing it wrongly would misstate which claim it supports.
+        if not names:
+            is_subject = None
+        else:
+            is_subject = seed in names
+        if is_subject is True:
+            subject += 1
+        elif is_subject is False:
+            counterparty += 1
+        signals.append({
+            "code": indicator.code,
+            "name": indicator.name,
+            "weight": indicator.weight,
+            "is_subject": is_subject,
+            "addresses": addresses,
+        })
+
+    return {
+        "subject": subject,
+        "counterparty": counterparty,
+        "unattributed": sum(1 for s in signals if s["is_subject"] is None),
+        "total": len(signals),
+        "subject_score": sum(s["weight"] for s in signals if s["is_subject"] is True),
+        "counterparty_score": sum(
+            s["weight"] for s in signals if s["is_subject"] is False
+        ),
+        "signals": signals,
+    }
+
+
+def _attribution_sentence(attribution: Dict[str, Any]) -> str:
+    """
+    One sentence saying how much of the score is about the subject.
+
+    Returned as a separate clause rather than folded into the assessment
+    prose so the report can place it next to the signals table, where a reader
+    looking at "which address is this about" will find it.
+    """
+    total = attribution.get("total") or 0
+    subject = attribution.get("subject") or 0
+    counterparty = attribution.get("counterparty") or 0
+
+    if not total:
+        return "No signals were raised, so there is nothing to attribute."
+
+    parts = [
+        f"{counterparty} of {total} signal"
+        f"{'s' if total != 1 else ''} "
+        f"{'were' if counterparty != 1 else 'was'} raised against counterparty "
+        f"addresses rather than the traced subject"
+    ]
+    if subject:
+        parts.append(f"{subject} concerned the subject address itself")
+    if attribution.get("unattributed"):
+        parts.append(
+            f"{attribution['unattributed']} could not be attributed to any address"
+        )
+    sentence = "; ".join(parts) + "."
+
+    if counterparty and subject == 0:
+        sentence += (
+            " The score is an aggregate over the whole traced graph, so a high "
+            "figure here can be driven entirely by addresses the subject dealt "
+            "with. It is not a finding about the subject address itself."
+        )
+    elif counterparty:
+        sentence += (
+            " The score is an aggregate over the whole traced graph, so the "
+            "subject's own contribution is the subject figure rather than the "
+            "total."
+        )
+    return sentence
+
+
 def _assessment_text(
     result: TraceResult, indicators: List[RiskIndicator], level: RiskLevel,
 ) -> str:
@@ -443,6 +546,12 @@ def _assessment_text(
         "data. They indicate where an investigation should focus; they are not a "
         "determination of intent or wrongdoing."
     )
+    attribution = _attribute_signals(result, indicators)
+    if attribution.get("counterparty"):
+        # Stated in the prose as well as in the report table, because the prose
+        # is what gets quoted when a finding is passed on, and a score quoted
+        # without its provenance becomes a claim about the wrong address.
+        parts.append(_attribution_sentence(attribution))
     return " ".join(parts)
 
 
@@ -588,4 +697,5 @@ def assess(result: TraceResult) -> RiskAssessment:
         indicators=indicators,
         assessment=_assessment_text(result, indicators, level),
         score_breakdown=breakdown,
+        signal_attribution=_attribute_signals(result, indicators),
     )
