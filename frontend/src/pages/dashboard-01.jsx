@@ -54,7 +54,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { useAuth } from "@/hooks/use-auth";
 import { api } from "@/lib/api";
 import { NOT_AVAILABLE, chainLabel, formatCount, formatDateTime } from "@/lib/format";
 
@@ -72,7 +71,6 @@ function count(n) {
 }
 
 export default function Dashboard01() {
-  const { isDemo } = useAuth();
   const [overview, setOverview] = useState(null);
   const [trend, setTrend] = useState(null);
   const [recent, setRecent] = useState(null);
@@ -230,15 +228,6 @@ export default function Dashboard01() {
           </Button>
         }
       />
-
-      {isDemo ? (
-        <Badge
-          variant="outline"
-          className="border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200"
-        >
-          Demo mode — cases are not isolated between users.
-        </Badge>
-      ) : null}
 
       <SectionCards stats={stats} />
 
