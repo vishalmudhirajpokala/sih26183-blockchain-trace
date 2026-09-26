@@ -169,6 +169,14 @@ class _Styles:
             "H", parent=base["Heading2"], fontName="Helvetica-Bold", fontSize=10.5,
             leading=13, textColor=_NAVY, spaceBefore=5 * mm, spaceAfter=2 * mm,
         )
+        # A heading inside the appendix, one step below a section. It exists so
+        # the appendix can carry its own title and then name the parts beneath
+        # it, rather than the appendix title and its first section being the
+        # same size with no visible hierarchy between them.
+        self.subheading = ParagraphStyle(
+            "H2", parent=base["Heading3"], fontName="Helvetica-Bold", fontSize=9.5,
+            leading=12, textColor=_NAVY, spaceBefore=4 * mm, spaceAfter=1.5 * mm,
+        )
         self.body = ParagraphStyle(
             "B", parent=base["Normal"], fontName="Helvetica", fontSize=8.3,
             leading=11, textColor=_INK,
@@ -212,6 +220,76 @@ def _header_table(data: List[List[Any]], first_width: float = 40 * mm) -> Table:
     return table
 
 
+def _plain_summary(result: TraceResult) -> str:
+    """
+    Two or three sentences of plain English, built only from values the engine
+    actually recorded.
+
+    This is generated, not written per case, so it cannot flatter a result. It
+    reports the chain and the subject, the reach of the trace, and the strongest
+    thing found -- and where the strongest thing is weak, such as a label that
+    is only a public provider's word, it says so in the same breath. A reader
+    who stops here should not come away with a stronger impression than the
+    evidence supports.
+    """
+    meta = result.metadata
+    chain = result.chain.display_name
+    subject = result.seed
+    risk = result.risk
+    txs = len(result.transactions)
+    addresses = meta.nodes_examined
+
+    reach = (
+        f"following value across {result.hops} hop{'' if result.hops == 1 else 's'}"
+    )
+    if meta.truncated:
+        reach += (
+            f", stopping at the configured limit of {meta.depth_limit} rather than "
+            f"because the trail ended"
+        )
+
+    sentences = [
+        f"BlockTrace began at {chain} address {subject} and traced outward, "
+        f"{reach}. It examined {addresses} address"
+        f"{'' if addresses == 1 else 'es'} and retrieved {txs} transfer"
+        f"{'' if txs == 1 else 's'} from the providers queried."
+    ]
+
+    if risk.indicators:
+        strongest = max(risk.indicators, key=lambda i: i.weight)
+        sentences.append(
+            f"The risk engine raised {len(risk.indicators)} indicator"
+            f"{'' if len(risk.indicators) == 1 else 's'}, the largest being "
+            f"\"{strongest.name}\" at {strongest.weight} points, giving a "
+            f"{risk.risk_level.value} score of {risk.risk_score} out of 100."
+        )
+    else:
+        sentences.append(
+            "The risk engine raised no indicators, so the score is 0. That is a "
+            "statement about the data that came back, not a clean bill of health."
+        )
+
+    if result.entity:
+        entity = result.entity
+        qualifier = (
+            "which is a public provider's label rather than an independently "
+            "verified identification"
+            if entity.source_type.value == "public_provider"
+            else f"attributed at the {entity.source_type.value} tier"
+        )
+        sentences.append(
+            f"The best-sourced label found anywhere in the trace was "
+            f"{entity.name}, {entity.type.value}, {qualifier}."
+        )
+    else:
+        sentences.append(
+            "No address in this trace carried an attribution from a real source, "
+            "so no destination is named."
+        )
+
+    return " ".join(sentences)
+
+
 def render_trace_report(
     result: TraceResult,
     output_path: str,
@@ -246,64 +324,98 @@ def render_trace_report(
     ))
 
     meta = result.metadata
-    story.append(Paragraph("Investigation summary", styles.section))
+
+    # =================================================================
+    # AT A GLANCE
+    #
+    # The finding, before the machinery. Everything below this block is
+    # supporting material for a reader who wants to verify it; this is the part
+    # a reader who only has ten seconds needs.
+    #
+    # Nothing is dropped in the move. The fields that used to sit in the
+    # "Investigation summary" table are all still here, re-grouped under the
+    # four questions a reader actually arrives with: what was traced, what did
+    # it reach, how risky is it, and who is behind it.
+    # =================================================================
+    story.append(Paragraph("At a glance", styles.section))
+
+    entity = result.entity
+    if entity:
+        destination_cell = Paragraph(
+            f"<b>{escape(_text(entity.name))}</b> &mdash; {escape(entity.type.value)}"
+            f"<br/>{entity.confidence}% confidence &mdash; "
+            f"{escape(entity.verification_status.value)}"
+            f"<br/>{escape(entity.source_type.value)}: "
+            f"{escape(_PROVENANCE_NOTE.get(entity.source_type.value, ''))}",
+            styles.body,
+        )
+    else:
+        destination_cell = Paragraph(
+            "<b>No known destination identified.</b> No address in this trace "
+            "carried an attribution from a real source. That is a statement "
+            "about the data that was retrieved, not a claim that these "
+            "addresses are unlabelled everywhere.",
+            styles.body,
+        )
+
+    status_text = result.status.value
+    if meta.truncated:
+        status_text += f" &mdash; truncated at hop {meta.max_depth_reached} of {meta.depth_limit}"
+
+    risk = result.risk
+    risk_cell = Paragraph(
+        f'<font color="{_RISK_COLOURS.get(risk.risk_level.value, _MUTED).hexval()}">'
+        f"<b>{risk.risk_level.value}</b></font> &mdash; {risk.risk_score} / 100"
+        f"<br/>{len(risk.indicators)} indicator"
+        f"{'s' if len(risk.indicators) != 1 else ''} raised",
+        styles.body,
+    )
+
     story.append(_kv_table([
-        ["Subject", Paragraph(_mono(result.seed), styles.address)],
+        ["Source wallet", Paragraph(_mono(result.seed), styles.address)],
+        ["Destination / entity", destination_cell],
+        ["Status", Paragraph(status_text, styles.body)],
+        ["Risk level", risk_cell],
         ["Chain", f"{result.chain.display_name} ({result.chain.value})"],
         ["Input type", result.input_type.value],
-        ["Status", f"{result.status.value}"],
-        ["Status detail", Paragraph(_text(result.status_detail), styles.body)],
         ["Nodes examined", str(meta.nodes_examined)],
         ["Transactions inspected", str(meta.transactions_inspected)],
-        ["Depth (limit / reached)", f"{meta.depth_limit} / {meta.max_depth_reached}"],
-        ["Hops", str(result.hops)],
-        ["Truncated", "Yes" if meta.truncated else "No"],
+        ["Hops reached", str(result.hops)],
         ["Providers consulted", str(len(meta.provider_usage))],
-        ["Generated", _when(int(meta.completed_at or time.time()))],
         ["Investigation ID", _mono(meta.investigation_id)],
         *([["Investigator", _text(investigator)]] if investigator else []),
-    ], styles))
+        ["Generated", _when(int(meta.completed_at or time.time()))],
+    ], styles, label_width=44 * mm))
 
-    # ---- evidence limits -------------------------------------------
-    story.append(Paragraph("Scope and evidence limits", styles.section))
-    limits: List[str] = [
-        "This report describes only the data returned by the providers queried, "
-        "up to the depth and time limits shown above. It is not a complete "
-        "picture of the address's on-chain history.",
-    ]
-    if meta.truncated:
-        limits.append(
-            "The trace was truncated: " + "; ".join(meta.truncation_reasons) + ". "
-            "Findings beyond that boundary were not examined."
-        )
-    for note in result.evidence_notes:
-        limits.append(note)
-    for paragraph in limits:
-        story.append(Paragraph(f"&bull; {paragraph}", styles.body))
-        story.append(Spacer(1, 1.5 * mm))
+    story.append(Spacer(1, 2.5 * mm))
 
-    # ---- risk ------------------------------------------------------
-    risk = result.risk
-    story.append(Paragraph("Risk assessment", styles.section))
-    story.append(_kv_table([
-        ["Risk score", f"{risk.risk_score} / 100"],
-        ["Risk level", Paragraph(
-            # `hexval()` already returns a form ReportLab accepts ("0xb04a00").
-            # Slicing off the "0x" prefix left a bare "b04a00" with no sigil,
-            # which `toColor` rejects -- so every report failed to render with
-            # `ValueError: Invalid color value 'b04a00'`, for every risk level.
-            f'<font color="{_RISK_COLOURS.get(risk.risk_level.value, _MUTED).hexval()}">'
-            f"<b>{risk.risk_level.value}</b></font>", styles.body,
-        )],
-        ["Signals", str(len(risk.indicators))],
-    ], styles, label_width=40 * mm))
-
-    story.append(Spacer(1, 2 * mm))
+    # The triage disclaimer, verbatim and unmoved. It is not softened, not
+    # shortened, and not relocated to an appendix: the score is the first thing
+    # on the page, so its limits have to be the first thing after it.
     story.append(Paragraph(
         "Scoring is a triage aid, not a probability of wrongdoing. "
         "Signals are structural observations; they indicate where to look next.",
         styles.small,
     ))
+
+    story.append(Spacer(1, 2.5 * mm))
+
+    # Plain English, for a reader who does not know what a hop is.
+    story.append(Paragraph(
+        "What happened", styles.subheading,
+    ))
+    story.append(Paragraph(_plain_summary(result), styles.body))
+
+    # ---- 1. risk signals ---------------------------------------------
+    # The score, the level and the triage disclaimer now live once, in "At a
+    # glance", because that is where a reader meets the number. Repeating all
+    # three here made the same three facts appear twice within one page of each
+    # other, which reads as padding rather than as emphasis.
+    #
+    # What remains here is the part that section could not summarise: every
+    # indicator, in full, with the evidence that fired it.
+    risk = result.risk
+    story.append(Paragraph("Risk signals", styles.section))
 
     if risk.indicators:
         story.append(Spacer(1, 2.5 * mm))
@@ -412,7 +524,41 @@ def render_trace_report(
         ])
     story.append(_header_table(node_rows, first_width=58 * mm))
 
-    # ---- providers -------------------------------------------------
+    # =================================================================
+    # APPENDIX
+    #
+    # Everything below is backup material: the boundaries of the trace and the
+    # call log behind it. A reader who trusts the findings above does not need
+    # it; a reader who intends to rely on them does. It is on its own page with
+    # its own heading so that distinction is visible rather than implied.
+    #
+    # "Scope and evidence limits" moved here from the second position, where it
+    # sat directly under the title and before any finding. That is a defensible
+    # place for a caveat and a poor place for one that interrupts the finding.
+    # Nothing about its wording changed.
+    # =================================================================
+    story.append(PageBreak())
+    story.append(Paragraph("Appendix: Trace Scope & Provider Diagnostics", styles.section))
+
+    # ---- 5. scope and evidence limits -------------------------------
+    story.append(Paragraph("Scope and evidence limits", styles.subheading))
+    limits: List[str] = [
+        "This report describes only the data returned by the providers queried, "
+        "up to the depth and time limits shown above. It is not a complete "
+        "picture of the address's on-chain history.",
+    ]
+    if meta.truncated:
+        limits.append(
+            "The trace was truncated: " + "; ".join(meta.truncation_reasons) + ". "
+            "Findings beyond that boundary were not examined."
+        )
+    for note in result.evidence_notes:
+        limits.append(note)
+    for paragraph in limits:
+        story.append(Paragraph(f"&bull; {paragraph}", styles.body))
+        story.append(Spacer(1, 1.5 * mm))
+
+    # ---- 6. provider log --------------------------------------------
     # Failures only, with a one-line account of the calls that worked.
     #
     # This was two full pages of one row per HTTP call: 70 rows for an

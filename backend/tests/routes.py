@@ -187,6 +187,114 @@ def main_check() -> int:
             f"{len(_RISK_COLOURS)} risk levels render"
         )
 
+    # -- the report must lead with the finding, not the machinery ----------
+    # A forensic dossier is read in two different ways by two different people.
+    # The evaluator wants the conclusion first; the analyst who intends to rely
+    # on it wants the provenance, the movement table and the call log. Both need
+    # to be there, but the order is what makes the first read possible -- and
+    # order is exactly the thing that silently drifts when a section is added
+    # somewhere convenient rather than somewhere intended.
+    #
+    # So the order is asserted here, against the flowables the renderer actually
+    # emits. The test wraps `Paragraph` to record what was drawn while still
+    # returning the real object, so the document still builds and the assertion
+    # reads the real story rather than the source order of the code. It
+    # deliberately does not require a PDF text extractor: `pypdf` is not a
+    # declared dependency of this project, and a test that only runs on a
+    # machine where somebody happened to `pip install` something is not a test.
+    import services.report_service as _rs  # noqa: E402
+
+    _seen: list = []
+    _real_paragraph = _rs.Paragraph
+
+    def _recording_paragraph(*args, **kwargs):  # noqa: ANN202
+        if args and isinstance(args[0], str):
+            _seen.append(args[0])
+        return _real_paragraph(*args, **kwargs)
+
+    _expected_order = [
+        "At a glance",
+        "Risk signals",
+        "Engine assessment",
+        "Entity attribution",
+        "Fund flow",
+        "Addresses examined",
+        "Appendix: Trace Scope & Provider Diagnostics",
+        "Scope and evidence limits",
+        "Data sources",
+    ]
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as fh:
+            order_out = fh.name
+        _rs.Paragraph = _recording_paragraph
+        try:
+            render_trace_report(
+                TraceResult.from_dict(row["result"]),
+                order_out,
+                investigator="contract-test",
+            )
+        finally:
+            _rs.Paragraph = _real_paragraph
+        os.unlink(order_out)
+
+        _positions = []
+        for _heading in _expected_order:
+            _at = next(
+                (i for i, t in enumerate(_seen) if t.strip() == _heading), -1
+            )
+            if _at < 0:
+                failures.append(
+                    f"REPORT ORDER: section {_heading!r} is not in the document"
+                )
+            else:
+                _positions.append((_heading, _at))
+        _ordered = [p for _, p in _positions]
+        if _ordered != sorted(_ordered):
+            failures.append(
+                "REPORT ORDER: sections render out of order: "
+                + " -> ".join(h for h, _ in _positions)
+            )
+    except Exception as exc:  # noqa: BLE001
+        failures.append(f"REPORT ORDER CHECK FAILED: {type(exc).__name__}: {exc}")
+
+    if not any(f.startswith("REPORT ORDER") for f in failures):
+        # Also assert the two promises that make page 1 honest rather than
+        # merely present: the destination row must never render blank, and the
+        # triage disclaimer must survive verbatim next to the score it limits.
+        #
+        # Which of the two destination forms is correct depends on the case, so
+        # the assertion follows the stored result rather than demanding one
+        # particular wording unconditionally.
+        _has_entity = bool(TraceResult.from_dict(row["result"]).entity)
+        if _has_entity:
+            if not any(
+                TraceResult.from_dict(row["result"]).entity.name in t
+                for t in _seen
+            ):
+                failures.append(
+                    "REPORT ORDER: this investigation resolved an entity but "
+                    "its name is absent from the document"
+                )
+        elif not any(
+            "No known destination identified" in t for t in _seen
+        ):
+            failures.append(
+                "REPORT ORDER: no entity was resolved, so the summary must "
+                "state 'No known destination identified' rather than leaving "
+                "the destination row blank"
+            )
+        if not any(
+            "Scoring is a triage aid, not a probability of wrongdoing."
+            in t
+            for t in _seen
+        ):
+            failures.append(
+                "REPORT ORDER: the triage disclaimer is missing from the "
+                "summary; the score must never appear without its limits"
+            )
+        if not any(f.startswith("REPORT ORDER") for f in failures):
+            print("report order     : finding first, appendix last (9 sections)")
+
     # The OpenAPI document is fetched by the browser. A service-role key or a
     # real provider key showing up in it would be a leak in the one artefact
     # every client can read.
