@@ -1,102 +1,68 @@
-import { Component, Suspense, lazy, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 
 import { HERO_SCENE_URL, heroSceneEnabled } from "@/lib/hero-scene";
 
 /**
- * The Spline runtime is a WebGL runtime and it is not small. Loading it eagerly
- * would put it in the entry bundle and make it compete with the page for
- * bandwidth on the one screen a judge sees first -- for a decoration.
+ * Ambient 3D scene for the hero, as an isolated iframe.
  *
- * So it is code-split and requested only once the browser is idle, and only
- * when the scene is actually going to be shown. If the chunk fails to arrive,
- * the Suspense fallback is simply what remains and the hero is unchanged.
- */
-const Spline = lazy(() => import("@splinetool/react-spline"));
-
-/**
- * Contains a scene that throws while running.
+ * Three decisions worth stating, because each of them is a way this could have
+ * gone wrong.
  *
- * This is not defensive padding; it is the thing that stops a decoration from
- * taking down a page. Tested by pointing the config at a URL that returns 403:
- * the Spline runtime then fails *inside* the component -- "Data read, but end of
- * buffer not reached" -- rather than rejecting the lazy import, so `Suspense`
- * does not catch it and the error propagates to the nearest boundary. There is
- * no boundary anywhere else in this app, so without this one component the whole
- * landing page renders blank.
+ * IT IS LAZY, AND THE `src` IS THE THING THAT IS DEFERRED
  *
- * Scene URLs also rot. Spline scenes are versioned, and an unpublished or
- * deleted scene starts 403ing with no change on our side at all. That failure is
- * expected rather than exceptional, and it has to be invisible.
- */
-class SceneBoundary extends Component {
-  constructor(props) {
-    super(props);
-    this.state = { failed: false };
-  }
-
-  static getDerivedStateFromError() {
-    return { failed: true };
-  }
-
-  componentDidCatch() {
-    // Intentionally silent. There is nothing useful to show a visitor about a
-    // background animation failing, and the only reader is whoever already
-    // knows: the URL in `lib/hero-scene.js` is wrong, or the scene is gone.
-  }
-
-  render() {
-    if (this.state.failed) return null;
-    return this.props.children;
-  }
-}
-
-/**
- * Ambient 3D scene for the hero.
+ * An iframe with a `src` in the first paint fetches and boots a WebGL viewer
+ * while the headline is still trying to render. The element is rendered empty
+ * and the `src` is attached only once the browser is idle, so the scene is in
+ * the same code path as a below-the-fold image: present in the layout from the
+ * start, loaded when it stops costing anything.
  *
- * Deliberately non-interactive and hidden from assistive technology, because it
- * carries no information -- it is decoration -- and three specific risks come
- * from forgetting that:
+ * IT IS NOT INTERACTIVE
  *
- *   pointer events  a canvas that swallows clicks sits over the hero's own call
- *                   to action, and on a touch device it can swallow a scroll.
- *   aria-hidden     a decorative graphic announced as content is noise at best
- *                   and misleading at worst.
- *   motion          continuous animation, which is why a reduced-motion
- *                   preference and a missing GPU each suppress the scene
- *                   outright rather than degrading it quietly.
+ * The canvas is decoration sitting in its own column, and an iframe that
+ * captures pointer events would swallow a scroll gesture on a touch device and
+ * could sit over the hero's own call to action. Non-interactive also means
+ * nobody can drag a "graph" out of it and read it as data, which matters on a
+ * page whose copy promises that everything shown is real.
+ *
+ * IT IS EXCLUDED FROM THE TAB ORDER AND FROM SCREEN READERS
+ *
+ * An iframe is focusable by default, so without `tabIndex={-1}` keyboard users
+ * tab into an animation that does nothing. It also carries a `title`, because
+ * that is what a frame is announced as, and the one it should be: decoration.
  */
 export function HeroScene({ className = "" }) {
   const enabled = heroSceneEnabled();
-  const [requested, setRequested] = useState(false);
+  const [src, setSrc] = useState(null);
 
   useEffect(() => {
-    if (!enabled || requested) return undefined;
-    const run = () => setRequested(true);
-    // requestIdleCallback where available; a short timeout otherwise, so the
-    // scene still appears on browsers without it rather than never appearing.
+    if (!enabled || src) return undefined;
+    const attach = () => setSrc(HERO_SCENE_URL);
     if (typeof window.requestIdleCallback === "function") {
-      const handle = window.requestIdleCallback(run, { timeout: 2000 });
+      const handle = window.requestIdleCallback(attach, { timeout: 2500 });
       return () => window.cancelIdleCallback?.(handle);
     }
-    const timer = window.setTimeout(run, 400);
+    const timer = window.setTimeout(attach, 500);
     return () => window.clearTimeout(timer);
-  }, [enabled, requested]);
+  }, [enabled, src]);
 
-  // Nothing to show. Returning null rather than an empty box keeps the hero
-  // pixel-identical to its pre-scene form, so the page does not reserve space
-  // for something that is not there.
-  if (!enabled || !requested) return null;
+  // Nothing configured: render nothing rather than an empty box, so the hero is
+  // exactly the layout it would have been without this feature.
+  if (!enabled) return null;
 
   return (
     <div
       aria-hidden="true"
       className={`pointer-events-none absolute inset-0 overflow-hidden ${className}`}
     >
-      <SceneBoundary>
-        <Suspense fallback={null}>
-          <Spline scene={HERO_SCENE_URL} />
-        </Suspense>
-      </SceneBoundary>
+      <iframe
+        src={src || undefined}
+        title="Decorative BlockTrace brand animation"
+        tabIndex={-1}
+        loading="lazy"
+        referrerPolicy="no-referrer"
+        className="h-full w-full border-0"
+        allow="autoplay; fullscreen"
+      />
     </div>
   );
 }

@@ -240,12 +240,16 @@ export default function Landing() {
               <p className="mt-4 text-xs text-muted-foreground">{access.detail}</p>
             </div>
 
-            {/* The scene's host. `relative` so the absolutely-positioned canvas
-                inside is bounded by this column rather than the whole hero.
-                Empty when no scene is configured -- HeroScene renders null, so
-                this is just an empty box in the page's own layout, with no
-                height forced on it and no layout shift when it activates. */}
-            <div className="relative hidden lg:block" aria-hidden="true">
+            {/* The scene's host. It needs an explicit height, not just
+                `relative`: the scene inside is absolutely positioned so it
+                contributes nothing to layout, and in an `items-center` grid
+                column an otherwise-empty box collapses to zero. Measured at
+                0x0 before this height was set, which renders a perfectly
+                working scene into a space that does not exist. */}
+            <div
+              className="relative hidden h-[340px] lg:block lg:h-[400px] xl:h-[480px]"
+              aria-hidden="true"
+            >
               <HeroScene />
             </div>
           </div>
