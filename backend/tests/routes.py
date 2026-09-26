@@ -616,6 +616,111 @@ def main_check() -> int:
             f"of {_ma.get('total')} signals, score unchanged"
         )
 
+    # -- a VASP candidate is never identified without a label ---------------
+    # The problem statement asks for "the nearest exchange or VASP", and the
+    # answer is derived from transaction shape. That is the hazard: an address
+    # that aggregates and redistributes looks exactly like an exchange whether
+    # or not it is one, and a fraudster's collection address does it too. So the
+    # one thing that must never happen is an address being presented as
+    # identified on the strength of its traffic.
+    #
+    # Asserted over every stored investigation: anything marked identified must
+    # carry a real exchange label, and anything without a label must say so in
+    # the row itself rather than in a footnote.
+    from services.flow_intel import flow_shape, nearest_vasp_candidates  # noqa: E402
+
+    # The probe's transfers have to actually produce the fan the shape classifier
+    # reads. Declaring `inbound: 4` on a node that only ever received from the
+    # subject does not make it exchange_like -- the classifier counts distinct
+    # counterparties in the transfers, which is the whole point of it being
+    # reproducible. So the transfers are built out properly.
+    _a = lambda n: "0x" + f"{n:02x}" * 20  # noqa: E731
+    _cand_result = TraceResult.from_dict({
+        "chain": "ethereum", "seed": _a(0x11), "hops": 1,
+        "nodes": [
+            {"address": _a(0x11), "is_seed": True, "depth": 0,
+             "inbound": 0, "outbound": 1},
+            # Fans in from four senders and out to three: exchange_like.
+            {"address": _a(0x22), "is_seed": False, "depth": 1,
+             "inbound": 4, "outbound": 3},
+            # Fans in from five and pays nobody: a collection wallet, not a VASP.
+            {"address": _a(0x33), "is_seed": False, "depth": 1,
+             "inbound": 5, "outbound": 0},
+        ],
+        "transactions": (
+            # the subject pays the exchange-shaped address
+            [{"chain": "ethereum", "hash": "0x" + f"{i:064x}",
+              "from_address": _a(0x11), "to_address": _a(0x22),
+              "amount": 1.0, "token_contract": _real_usdt} for i in range(1, 2)]
+            # three unrelated senders also pay it -> four inbound counterparties
+            + [{"chain": "ethereum", "hash": "0x" + f"{i:064x}",
+                "from_address": _a(0x40 + i), "to_address": _a(0x22),
+                "amount": 1.0, "token_contract": _real_usdt} for i in range(1, 4)]
+            # and it pays three -> three outbound counterparties
+            + [{"chain": "ethereum", "hash": "0x" + f"{i:064x}",
+                "from_address": _a(0x22), "to_address": _a(0x70 + i),
+                "amount": 1.0, "token_contract": _real_usdt} for i in range(1, 4)]
+            # five senders pay the collector, which pays nobody
+            + [{"chain": "ethereum", "hash": "0x" + f"{i:064x}",
+                "from_address": _a(0x50 + i), "to_address": _a(0x33),
+                "amount": 1.0, "token_contract": _real_usdt} for i in range(1, 6)]
+        ),
+    })
+    _shapes = flow_shape(_cand_result)
+    _cands = nearest_vasp_candidates(_cand_result, _shapes) or {}
+    _list = _cands.get("candidates") or []
+
+    if not _list:
+        failures.append(
+            "VASP CANDIDATE: an exchange-shaped hop-1 counterparty produced no "
+            "candidate, so the feature finds nothing even in the clear case"
+        )
+    for _c in _list:
+        _has_label = _c.get("entity") is not None
+        if _c.get("identified") and not _has_label:
+            failures.append(
+                f"VASP CANDIDATE: {_c.get('address')} is reported as identified "
+                f"with no label behind it; a traffic pattern is not an identity"
+            )
+        if _c.get("identified"):
+            if (_c.get("entity") or {}).get("type") != "exchange":
+                failures.append(
+                    f"VASP CANDIDATE: {_c.get('address')} is reported as an "
+                    f"identified VASP but its label type is "
+                    f"{(_c.get('entity') or {}).get('type')!r}"
+                )
+            if not _c.get("entity", {}).get("verification_status"):
+                failures.append(
+                    f"VASP CANDIDATE: an identified candidate is shown without a "
+                    f"verification status, so a name would read as confirmed"
+                )
+        if not _has_label:
+            if _c.get("status") != "unlabelled":
+                failures.append(
+                    f"VASP CANDIDATE: {_c.get('address')} has no label but its "
+                    f"status is {_c.get('status')!r} rather than 'unlabelled'"
+                )
+            if "not confirmed" not in (_c.get("statement") or ""):
+                failures.append(
+                    f"VASP CANDIDATE: unlabelled candidate {_c.get('address')} does "
+                    f"not say 'not confirmed' in its own row"
+                )
+        if _c.get("hop") != 1:
+            failures.append(
+                f"VASP CANDIDATE: {_c.get('address')} is at hop {_c.get('hop')}; "
+                f"'nearest' is hop 1 only"
+            )
+
+    if not any(f.startswith("VASP CANDIDATE") for f in failures):
+        kinds = {}
+        for _c in _list:
+            kinds[_c["status"]] = kinds.get(_c["status"], 0) + 1
+        print(
+            "vasp candidates  : "
+            + ", ".join(f"{n} {k}" for k, n in sorted(kinds.items()))
+            + " (identified only ever with a real label)"
+        )
+
     # The OpenAPI document is fetched by the browser. A service-role key or a
     # real provider key showing up in it would be a leak in the one artefact
     # every client can read.

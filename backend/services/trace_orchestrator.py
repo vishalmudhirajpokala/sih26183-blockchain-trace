@@ -35,7 +35,11 @@ from models.schemas import (
 )
 from services import risk_engine
 from services.chain_detection import detect_chain, resolve_chain_by_evidence
-from services.flow_intel import flow_shape, investigative_recommendations
+from services.flow_intel import (
+    flow_shape,
+    investigative_recommendations,
+    nearest_vasp_candidates,
+)
 from services.chain_registry import get_adapter
 from utils.http_client import HttpClient, RequestCache
 
@@ -315,6 +319,11 @@ def run_investigation(
         shapes = flow_shape(result)
         result.metadata.flow_shapes = shapes
         result.metadata.recommendations = investigative_recommendations(result, shapes)
+        # The "nearest exchange or VASP" ranking the problem statement asks for.
+        # Computed from the same shapes and the same provider labels, adding no
+        # new source, and recorded under metadata so it is stored with the
+        # investigation and re-renders identically from the PDF later.
+        result.metadata.vasp_candidates = nearest_vasp_candidates(result, shapes)
     except Exception as exc:  # noqa: BLE001
         # A classification failure must never cost the investigator the trace.
         # The result is already assembled and truthful; it simply has no shapes.

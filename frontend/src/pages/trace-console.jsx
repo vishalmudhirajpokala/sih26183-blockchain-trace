@@ -397,6 +397,114 @@ function coverageLine(result, meta) {
     : `${limited} ${covered}`;
 }
 
+/**
+ * The nearest VASP candidate, ranked from hop-1 counterparties.
+ *
+ * The problem statement asks for "the nearest exchange or VASP receiving direct
+ * deposits", and this is the honest limit of what flow analysis can answer. Two
+ * kinds of row appear and they are not the same kind of claim, so they are never
+ * styled the same:
+ *
+ *   identified  a public provider already labels this address as an exchange.
+ *               The existing provenance language travels with it unchanged --
+ *               source tier, confidence, verification status -- because a name
+ *               without its confidence is a rumour.
+ *   unlabelled  the traffic aggregates and redistributes the way a deposit
+ *               address does, and nothing names it. Stated in those words.
+ *
+ * A scammer's collection address has the same shape as an exchange's. That is
+ * precisely why the shape is never allowed to read as an identity, and why the
+ * unlabelled row says "not confirmed" in the row itself rather than in a
+ * footnote nobody reaches.
+ */
+function VaspCandidates({ data }) {
+  if (!data) return null;
+  const candidates = data.candidates || [];
+  const named = data.named || 0;
+  const unlabelled = data.unlabelled_candidates || 0;
+
+  return (
+    <SectionCard
+      title="Nearest VASP candidate"
+      description={`Ranked from ${data.considered}. Behavioural observation plus whatever labels already exist — this system does not identify an address from its transaction pattern alone.`}
+      bodyClassName="space-y-3"
+    >
+      <p className="text-[10px] leading-4 text-muted-foreground">{data.note}</p>
+
+      {candidates.length === 0 ? (
+        <p className="rounded-md border border-border bg-muted/40 px-3 py-2.5 text-xs leading-5">
+          No hop-1 counterparty looked like a deposit address or carried an
+          exchange label. That is a statement about the first hop of this trace
+          only — it is not a finding that no VASP is involved.
+        </p>
+      ) : (
+        <>
+          <p className="text-xs text-muted-foreground">
+            {named} identified · {unlabelled} unlabelled ·{" "}
+            {candidates.length} candidate{candidates.length === 1 ? "" : "s"}
+          </p>
+          <ul className="space-y-2">
+            {candidates.map((c) => (
+              <li
+                key={c.address}
+                className={`rounded-md border px-3 py-2.5 ${
+                  c.identified
+                    ? "border-border bg-card"
+                    : "border-amber-500/40 bg-amber-500/5"
+                }`}
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <span
+                    className={`shrink-0 rounded border px-1.5 py-0.5 text-[9px] uppercase tracking-wide ${
+                      c.identified
+                        ? "border-border text-muted-foreground"
+                        : "border-amber-500/50 text-amber-700 dark:text-amber-300"
+                    }`}
+                  >
+                    {c.identified ? "Identified" : "Unlabelled"}
+                  </span>
+                  {c.entity ? (
+                    <span className="text-sm font-medium">{c.entity.name}</span>
+                  ) : null}
+                  <span className="font-mono text-[11px] break-all text-muted-foreground">
+                    {c.address}
+                  </span>
+                </div>
+
+                <p className="mt-1.5 text-xs leading-5">{c.statement}</p>
+
+                {/*
+                  The evidence for the shape, verbatim from the classifier. It is
+                  shown because "possible exchange" is a weak claim and the
+                  numbers under it are what the claim is made of.
+                */}
+                {c.shape_reasoning ? (
+                  <p className="mt-1.5 text-[10px] leading-4 text-muted-foreground">
+                    {c.shape_reasoning}
+                  </p>
+                ) : null}
+
+                <p className="mt-1.5 text-[10px] text-muted-foreground">
+                  hop {c.hop} · {c.direction === "sent_to_subject" ? "sent to the traced address" : c.direction === "received_from_subject" ? "received from the traced address" : "direction not established"}
+                  {c.assets && c.assets.length ? ` · ${c.assets.join(", ")}` : ""}
+                </p>
+
+                {c.entity ? (
+                  <p className="mt-1 text-[10px] text-muted-foreground">
+                    {String(c.entity.source_type || "").replace(/_/g, " ")} ·{" "}
+                    {c.entity.confidence}% confidence ·{" "}
+                    {String(c.entity.verification_status || "").replace(/_/g, " ")}
+                  </p>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </SectionCard>
+  );
+}
+
 function ResultPanel({ response, onReset }) {
   const navigate = useNavigate();
   const result = response.result || {};
@@ -607,6 +715,15 @@ function ResultPanel({ response, onReset }) {
 
       {/* compact: the hero above owns the level and score. */}
       <RiskPanel risk={risk} chain={result.chain} compact />
+
+      {/*
+        After the entity and risk material, not competing with it. The hero is
+        the answer to "what is this and how risky is it"; this is the answer to
+        the narrower question of where the money went next, and it is worth a
+        prominent position because the problem statement leads with it -- but it
+        is not allowed to sit above the finding it depends on.
+      */}
+      <VaspCandidates data={meta.vasp_candidates} />
 
       <SectionCard
         title="Fund flow"

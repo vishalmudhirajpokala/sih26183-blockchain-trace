@@ -593,6 +593,14 @@ class TraceMetadata:
     # asserts exactly -- does not change.
     flow_shapes: Dict[str, Any] = field(default_factory=dict)
     recommendations: List[Dict[str, Any]] = field(default_factory=list)
+    # The subject's hop-1 counterparties ranked by how VASP-like they are.
+    #
+    # Kept under metadata, and recorded whether or not anything was found. An
+    # empty list is a real answer -- it means no counterparty on the first hop
+    # looked like a deposit address or carried an exchange label -- and it is
+    # distinguishable from "this was never computed", which is why the field
+    # exists rather than being inferred from an absent key.
+    vasp_candidates: Optional[Dict[str, Any]] = None
     # Whether the traced address is a deployed contract or an externally-owned
     # account, and what was done about it.
     #
@@ -625,6 +633,7 @@ class TraceMetadata:
             "chain_resolution": self.chain_resolution,
             "flow_shapes": self.flow_shapes,
             "recommendations": self.recommendations,
+            "vasp_candidates": self.vasp_candidates,
             "subject_is_contract": self.subject_is_contract,
             "contract_check": self.contract_check,
         }
@@ -648,6 +657,7 @@ class TraceMetadata:
             chain_resolution=data.get("chain_resolution"),
             flow_shapes=data.get("flow_shapes") or {},
             recommendations=data.get("recommendations") or [],
+            vasp_candidates=data.get("vasp_candidates"),
             subject_is_contract=data.get("subject_is_contract"),
             contract_check=data.get("contract_check"),
         )

@@ -61,7 +61,7 @@ expert, and cannot be tuned by an operator either.
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from models.schemas import AttributionSource, EntityType, TraceResult
 
@@ -225,6 +225,172 @@ def as_attribution(shape: Dict) -> Dict:
             "Derived from transaction flow in this investigation. This is a "
             "pattern, not an identification: it does not name the operator of "
             "this address and is not evidence that it is involved in crime."
+        ),
+    }
+
+
+def nearest_vasp_candidates(
+    result: TraceResult, shapes: Dict[str, Dict]
+) -> Dict[str, Any]:
+    """
+    Rank the traced address's immediate counterparties by how VASP-like they are.
+
+    The problem statement asks for "the nearest exchange or VASP receiving direct
+    deposits". This answers it as far as the available data honestly allows, and
+    it is deliberately built from two things only: a counterparty's flow shape,
+    which is computed from the transfers in front of us, and whatever label a
+    public provider already attached to it. No new data source, no model, no
+    inference beyond the existing four-shape classification.
+
+    THE ONE RULE THIS FUNCTION ENFORCES
+
+    A candidate is never presented as identified unless an address in the
+    curated registry or a public provider label says so, and when it is, the
+    existing provenance language travels with it unchanged -- source tier,
+    confidence, verification status. A behavioural candidate with no label is
+    reported as unlabelled, in those words, because "exchange-like" is a
+    description of traffic and not an identity. A scammer's deposit address
+    aggregates and redistributes exactly as an exchange's does; that is the whole
+    reason the shape cannot be allowed to read as a name.
+
+    RANKING, and why
+
+      1. labelled, and labelled as an exchange -- an actual identification, and
+         the only thing in this list that is one
+      2. unlabelled but `exchange_like` -- the behaviour matches a deposit
+         address, nothing more
+      3. labelled as something else -- named, but not as a VASP
+      4. anything else is not a candidate and is not listed
+
+    Only hop-1 counterparties are considered. "Nearest" is meant literally: a
+    candidate three hops out is a different question, and a trace bounded at
+    depth 1 would otherwise return an empty list while implying it had looked
+    further than it did.
+    """
+    seed = (result.seed or "").lower()
+
+    # Which direction money moved between the subject and each counterparty, from
+    # the transfers themselves rather than from the shape record.
+    direction: Dict[str, str] = {}
+    for tx in result.transactions:
+        sender = (tx.from_address or "").lower()
+        recipient = (tx.to_address or "").lower()
+        if sender == seed and recipient and recipient != seed:
+            direction[recipient] = "received_from_subject"
+        elif recipient == seed and sender and sender != seed:
+            direction.setdefault(sender, "sent_to_subject")
+
+    candidates = []
+    for node in result.nodes:
+        address = node.address or ""
+        key = address.lower()
+        if key == seed:
+            continue
+        # Hop 1 only. A node the shape record never saw has no flow evidence, so
+        # it cannot be assessed and is not guessed at.
+        shape = shapes.get(key) or shapes.get(address)
+        if not shape:
+            continue
+        # Hop 1 only, from the node's own depth. The shape record has no depth
+        # field, and "nearest" is meant literally -- a candidate further out is
+        # a different question.
+        depth = getattr(node, "depth", None)
+        if not isinstance(depth, int) or depth != 1:
+            continue
+        if int(shape.get("inbound_counterparties", 0)) == 0 and int(
+            shape.get("outbound_counterparties", 0)
+        ) == 0:
+            # Present as a node but with no observed fan in either direction.
+            continue
+
+        entity = node.entity
+        is_labelled = entity is not None and bool(getattr(entity, "name", None))
+        entity_type = getattr(getattr(entity, "type", None), "value", None)
+        is_exchange_label = is_labelled and entity_type == EntityType.EXCHANGE.value
+        shape_name = shape.get("shape")
+
+        if is_exchange_label:
+            rank = 0
+        elif shape_name == "exchange_like":
+            rank = 1
+        elif is_labelled:
+            rank = 2
+        else:
+            continue
+
+        # `identified` is the whole point of the feature, so it is computed once
+        # here and the UI reads it rather than re-deriving it and getting it
+        # subtly wrong.
+        identified = is_exchange_label
+        if identified:
+            status = "identified"
+            statement = (
+                f"Labelled {entity.name} ({entity_type}) by a "
+                f"{getattr(entity.source_type, 'value', 'unknown')} source at "
+                f"{entity.confidence}% confidence, "
+                f"{getattr(entity.verification_status, 'value', 'unverified')}. "
+                f"This is a provider's label, not a BlockTrace confirmation."
+            )
+        elif shape_name == "exchange_like":
+            status = "unlabelled"
+            statement = (
+                "Unlabelled \u2014 flow shape suggests possible exchange/VASP, not "
+                "confirmed. No provider or curated record names this address. Its "
+                "traffic aggregates and redistributes in both directions, which "
+                "is also what a fraudulent deposit address does."
+            )
+        else:
+            status = "labelled_not_vasp"
+            statement = (
+                f"Labelled {entity.name} ({entity_type}), which is not an "
+                f"exchange or VASP. Listed because it is a named counterparty on "
+                f"the path, not as a VASP candidate."
+            )
+
+        candidates.append({
+            "address": address,
+            "hop": depth,
+            "rank": rank,
+            "status": status,
+            "identified": identified,
+            "shape": shape_name,
+            "shape_reasoning": shape.get("reasoning"),
+            "direction": direction.get(key),
+            "inbound_counterparties": shape.get("inbound_counterparties"),
+            "outbound_counterparties": shape.get("outbound_counterparties"),
+            "value": shape.get("value_in") if direction.get(key) == "sent_to_subject"
+                    else shape.get("value_out"),
+            "assets": shape.get("assets") or [],
+            "entity": {
+                "name": entity.name,
+                "type": entity_type,
+                "source_type": getattr(entity.source_type, "value", None),
+                "confidence": entity.confidence,
+                "verification_status": getattr(entity.verification_status, "value", None),
+                "source_url": getattr(entity, "source_url", None),
+                "notes": getattr(entity, "notes", None),
+            } if is_labelled else None,
+            "statement": statement,
+        })
+
+    candidates.sort(key=lambda c: (c["rank"], -(c.get("value") or 0)))
+
+    return {
+        "fan_threshold": FAN_THRESHOLD,
+        "considered": "hop-1 counterparties only",
+        "named": sum(1 for c in candidates if c["identified"]),
+        "unlabelled_candidates": sum(
+            1 for c in candidates if c["status"] == "unlabelled"
+        ),
+        "candidates": candidates,
+        # Stated once, at the top, so a reader who only reads this still knows
+        # the difference between the two kinds of row below it.
+        "note": (
+            "Candidates are ranked from observed flow and existing labels only. "
+            "A row marked 'identified' carries a public provider's label at the "
+            "confidence shown; a row marked 'unlabelled' is a behavioural "
+            "observation and names nobody. No address is identified by this "
+            "system on the basis of its transaction pattern alone."
         ),
     }
 
