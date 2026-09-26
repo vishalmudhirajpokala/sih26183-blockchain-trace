@@ -8,7 +8,7 @@
  */
 
 import { Link, Outlet } from "react-router-dom";
-import { FlaskConicalIcon, ShieldAlertIcon, WifiOffIcon } from "lucide-react";
+import { ShieldAlertIcon, WifiOffIcon } from "lucide-react";
 
 import { AppSidebar } from "@/components/app-sidebar";
 import { SiteHeader } from "@/components/site-header";
@@ -19,39 +19,7 @@ import {
 import { useAuth } from "@/hooks/use-auth";
 
 /**
- * A standing statement about the deployment.
- *
- * RULE 6 — demo mode is clearly separated. In a demo, saved cases are in a
- * JSON file on one machine and everyone shares them, so the banner says so on
- * every page rather than only on the sign-in screen where it is easy to miss.
- */
-function AccessBanner() {
-  const { isDemo } = useAuth();
-  if (!isDemo) return null;
-
-  return (
-    <div className="flex items-start gap-2 border-b border-amber-300 bg-amber-50 px-4 py-2 text-xs text-amber-900 dark:border-amber-900 dark:bg-amber-950/60 dark:text-amber-200 lg:px-6">
-      <FlaskConicalIcon className="mt-0.5 size-3.5 shrink-0" />
-      <p>
-        <strong className="font-semibold">Demo mode.</strong> No account is
-        signed in. Cases are stored in a local JSON file and are visible to
-        anyone using this deployment — do not enter real case data.
-        {/*
-          `status.note` is deliberately NOT rendered here. It is the server's
-          deployment note — "Configure SUPABASE_URL and SUPABASE_ANON_KEY and set
-          BLOCKTRACE_DEMO_MODE=false to require sign-in" — which is operator
-          documentation, not product copy. It appeared under this banner on every
-          page, so anyone trying the prototype had to read how to deploy it before
-          they could use it. Help/Method is where someone who wants to deploy will
-          look for it; the banner says only what a user needs, which is that
-          nothing here is private.
-        */}
-      </p>
-    </div>
-  );
-}
-
-/** Shown when the API is down, on every page rather than only on first load. */
+ * Shown when the API is down, on every page rather than only on first load. */
 function OfflineBanner() {
   const { status, loading, refreshStatus } = useAuth();
   if (loading || status) return null;
@@ -95,7 +63,6 @@ export function AppShell() {
         work as designed.
       */}
       <SidebarInset className="@container/main">
-        <AccessBanner />
         <OfflineBanner />
         <SiteHeader />
         <div className="flex flex-1 flex-col gap-6 p-4 md:p-6 lg:p-8">
