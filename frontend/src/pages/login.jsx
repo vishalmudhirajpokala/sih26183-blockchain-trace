@@ -120,8 +120,19 @@ export default function Login() {
   const [error, setError] = useState(null);
   const [notice, setNotice] = useState(null);
 
-  // A bookmarked investigation survives the round trip through this page.
-  const destination = location.state?.from || "/app";
+  /*
+   * Where a successful sign-in lands.
+   *
+   * The trace console, not the dashboard. Someone who just authenticated has
+   * not come to read a dashboard -- they came to do the thing they needed an
+   * account to do, which is trace a wallet. The dashboard is a place to end up,
+   * not a place to be sent.
+   *
+   * A bookmarked investigation still wins: `location.state.from` is set by the
+   * route guard, so being bounced off a deep link and signing in returns you to
+   * the case you were reading rather than discarding it.
+   */
+  const destination = location.state?.from || "/app/trace";
 
   /**
    * Google sign-in.
@@ -346,7 +357,22 @@ export default function Login() {
     <div className="flex min-h-svh flex-col bg-background">
       <div className="mx-auto flex w-full max-w-md flex-1 flex-col justify-center px-5 py-12">
         <Link to="/" className="mb-8 flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground">
-          <Radar className="size-4" aria-hidden="true" />
+          {/* The mark, swapped by theme. See app-sidebar.jsx for why there are
+              two files rather than one filtered. */}
+          <img
+            src="/brand/blocktrace-mark.png"
+            alt=""
+            width={18}
+            height={18}
+            className="size-[18px] shrink-0 dark:hidden"
+          />
+          <img
+            src="/brand/blocktrace-mark-on-dark.png"
+            alt=""
+            width={18}
+            height={18}
+            className="hidden size-[18px] shrink-0 dark:block"
+          />
           BlockTrace
         </Link>
 

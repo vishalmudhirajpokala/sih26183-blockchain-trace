@@ -46,6 +46,17 @@ _MUTED = colors.HexColor("#667085")
 _NAVY = colors.HexColor("#19365F")
 _RULE = colors.HexColor("#D6DBE4")
 
+#: How many value movements the report lists in full.
+#:
+#: A busy subject produces hundreds, and listing every one turned a two-page
+#: forensic summary into a nine-page data export -- four of those pages were
+#: this table alone. Twelve is enough to show the shape of the flow and to give
+#: a reader rows to check against a block explorer. Everything past that is
+#: counted and pointed at, never silently dropped: the summary table already
+#: carries the true total, and the note under the table states how many are
+#: listed here and where the rest live.
+_MOVEMENT_ROWS_SHOWN = 12
+
 #: Risk levels get a colour, but the colour never changes the words. The text
 #: is what a reader acts on; colour is a scanning aid only.
 _RISK_COLOURS = {
@@ -355,7 +366,7 @@ def render_trace_report(
             Paragraph("Amount", styles.body),
             Paragraph("Time", styles.body),
         ]]
-        for edge in result.edges[:60]:
+        for edge in result.edges[:_MOVEMENT_ROWS_SHOWN]:
             graph_rows.append([
                 Paragraph(_mono(edge.transaction_hash[:22] + "…"), styles.address),
                 Paragraph(_mono(edge.from_address), styles.address),
@@ -364,10 +375,18 @@ def render_trace_report(
                 Paragraph(_when(edge.timestamp), styles.small),
             ])
         story.append(_header_table(graph_rows, first_width=34 * mm))
-        if len(result.edges) > 60:
+        if len(result.edges) > _MOVEMENT_ROWS_SHOWN:
+            # Stated plainly, with both numbers, because a report that quietly
+            # stops listing is worse than one that admits it stopped. The full
+            # set is not discarded -- it is in the saved investigation and in
+            # the app -- and this line is where the reader learns that.
             story.append(Paragraph(
-                f"Showing 60 of {len(result.edges)} movements. The full set is "
-                f"in the saved investigation record.", styles.small,
+                f"<b>Showing {_MOVEMENT_ROWS_SHOWN} of {len(result.edges)} "
+                f"movements.</b> The remainder are not missing and have not been "
+                f"filtered out: the complete set of "
+                f"{len(result.edges)} transfers is held in the saved "
+                f"investigation record, and every one of them carries the same "
+                f"fields as the rows above.", styles.small,
             ))
 
     # ---- chain detail ---------------------------------------------
@@ -394,33 +413,57 @@ def render_trace_report(
     story.append(_header_table(node_rows, first_width=58 * mm))
 
     # ---- providers -------------------------------------------------
-    story.append(Paragraph("Provider log", styles.section))
-    story.append(Paragraph(
-        "Which provider served which part of this investigation, and how it "
-        "went. A failed call is recorded as a failed call.", styles.small,
-    ))
-    story.append(Spacer(1, 2 * mm))
-    if meta.provider_usage:
-        prov_rows: List[List[Any]] = [[
-            Paragraph("Provider", styles.body),
-            Paragraph("OK", styles.body),
-            Paragraph("Status", styles.body),
-            Paragraph("Latency", styles.body),
-            Paragraph("Error", styles.body),
-        ]]
-        for usage in meta.provider_usage:
-            prov_rows.append([
-                Paragraph(_mono(usage.provider), styles.address),
-                "yes" if usage.ok else "no",
-                _text(usage.status_code),
-                f"{usage.latency_ms} ms" if usage.latency_ms is not None else "-",
-                Paragraph(_text(usage.error, "-"), styles.small),
-            ])
-        story.append(_header_table(prov_rows, first_width=36 * mm))
-    else:
+    # Failures only, with a one-line account of the calls that worked.
+    #
+    # This was two full pages of one row per HTTP call: 70 rows for an
+    # investigation that read 98 transfers, all of them "yes / 200 / 2134 ms".
+    # That is a data export, not evidence, and it buried the one thing a reader
+    # needs from this section.
+    #
+    # What a reader needs to know is whether anything failed, because a trace
+    # that succeeded after a provider outage is a different claim from one that
+    # never hit an outage. So successes are counted in a sentence and only the
+    # failures get rows.
+    failed_usage = [u for u in (meta.provider_usage or []) if not u.ok]
+    total_usage = len(meta.provider_usage or [])
+    ok_usage = total_usage - len(failed_usage)
+    providers_used = sorted({u.provider for u in (meta.provider_usage or []) if u.provider})
+
+    story.append(Paragraph("Data sources", styles.section))
+    if not total_usage:
         story.append(Paragraph(
             "No provider calls were made for this investigation.", styles.body,
         ))
+    else:
+        if failed_usage:
+            story.append(Paragraph(
+                f"<b>{len(failed_usage)} of {total_usage} provider calls "
+                f"failed.</b> They are listed below. A failure is a statement "
+                f"about the provider, not about the address: nothing can be "
+                f"concluded from data that was not returned.", styles.body,
+            ))
+        else:
+            story.append(Paragraph(
+                f"All {total_usage} provider calls succeeded, across "
+                f"{len(providers_used)} provider"
+                f"{'s' if len(providers_used) != 1 else ''}"
+                f" ({', '.join(providers_used)}). No provider reported an error "
+                f"during this investigation.", styles.body,
+            ))
+        story.append(Spacer(1, 2 * mm))
+        if failed_usage:
+            prov_rows: List[List[Any]] = [[
+                Paragraph("Provider", styles.body),
+                Paragraph("Status", styles.body),
+                Paragraph("Error", styles.body),
+            ]]
+            for usage in failed_usage:
+                prov_rows.append([
+                    Paragraph(_mono(usage.provider), styles.address),
+                    _text(usage.status_code),
+                    Paragraph(_text(usage.error, "No detail recorded."), styles.small),
+                ])
+            story.append(_header_table(prov_rows, first_width=36 * mm))
 
     # ---- footer ----------------------------------------------------
     def _page(canvas, doc_):

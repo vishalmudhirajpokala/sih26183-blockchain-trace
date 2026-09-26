@@ -30,7 +30,6 @@ import {
   Fingerprint,
   GitBranch,
   Network,
-  Radar,
   ShieldAlert,
 } from "lucide-react";
 
@@ -157,7 +156,23 @@ export default function Landing() {
       {/* ---------------------------------------------------------- masthead */}
       <header className="sticky top-0 z-20 border-b bg-background/85 backdrop-blur">
         <div className="mx-auto flex h-14 max-w-6xl items-center gap-3 px-5">
-          <Radar className="size-5 text-primary" aria-hidden="true" />
+          {/* The real mark, with the two files swapped by theme. See the note in
+              app-sidebar.jsx: the navy ink is invisible on the dark shell, and
+              filtering it would also wash out the blues. */}
+          <img
+            src="/brand/blocktrace-mark.png"
+            alt=""
+            width={22}
+            height={22}
+            className="size-[22px] shrink-0 dark:hidden"
+          />
+          <img
+            src="/brand/blocktrace-mark-on-dark.png"
+            alt=""
+            width={22}
+            height={22}
+            className="hidden size-[22px] shrink-0 dark:block"
+          />
           <span className="font-heading text-sm font-semibold tracking-tight">BlockTrace</span>
           <nav className="ml-auto flex items-center gap-1">
             <Button variant="ghost" size="sm" render={<a href="#how" />}>
