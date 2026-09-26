@@ -295,6 +295,255 @@ def main_check() -> int:
         if not any(f.startswith("REPORT ORDER") for f in failures):
             print("report order     : finding first, appendix last (9 sections)")
 
+    # -- the summary must not claim a counterparty is the destination ------
+    # `TraceResult.entity` is the best attribution found *anywhere* in a trace,
+    # which is the correct thing to report and the wrong thing to word as "the
+    # destination". Trace the USDT contract and the best label in the trace is
+    # "Binance-Hot 7" at hop 1 -- a counterparty that touched the contract, not
+    # a place the subject's funds went. Rendering that as a destination states
+    # something untrue in the most prominent position on page 1.
+    #
+    # So the report distinguishes the two cases, and this asserts that it does,
+    # over every stored investigation, from the values rather than from the
+    # prose: an attribution that belongs to the seed must be reported as the
+    # subject's own identity, and one that belongs to a hop must be reported as
+    # a counterparty. Getting this backwards in either direction is a false
+    # statement about whose money went where.
+    from services.report_service import _entity_origin  # noqa: E402
+
+    # `rows` above is deliberately limit=1 -- it just needs one result to render
+    # a PDF from. This check is only worth anything across every stored case, so
+    # it asks for all of them separately.
+    _all_rows, _ = get_repository().list_investigations(
+        limit=200, offset=0, user_id=None
+    )
+
+    _subject_ok = _counterparty_ok = 0
+    for _row in _all_rows:
+        _res = TraceResult.from_dict(_row["result"])
+        if _res.entity is None:
+            continue
+        _o = _entity_origin(_res)
+        if _o["is_subject"]:
+            if _o["depth"] != 0 or (_o["address"] or "").lower() != _res.seed.lower():
+                failures.append(
+                    f"REPORT ENTITY: {_res.seed} is reported as the subject's own "
+                    f"identity but the origin does not point at the seed "
+                    f"(depth={_o['depth']}, address={_o['address']})"
+                )
+            else:
+                _subject_ok += 1
+        else:
+            # A counterparty claim has to be checkable: the address and the hop
+            # must both be real, and the address must genuinely carry the label.
+            if not _o["address"] or not isinstance(_o["depth"], int):
+                failures.append(
+                    f"REPORT ENTITY: a counterparty attribution in {_res.seed} is "
+                    f"reported without a resolvable address or depth "
+                    f"(address={_o['address']}, depth={_o['depth']})"
+                )
+            elif not any(
+                (n.address or "").lower() == _o["address"].lower()
+                and n.entity is not None
+                and n.entity.name == _res.entity.name
+                for n in _res.nodes
+            ):
+                failures.append(
+                    f"REPORT ENTITY: {_o['address']} is named as the holder of "
+                    f"{_res.entity.name} but no node in the trace carries it"
+                )
+            else:
+                _counterparty_ok += 1
+
+    if not any(f.startswith("REPORT ENTITY") for f in failures):
+        print(
+            "report entity    : "
+            f"{_subject_ok} subject, {_counterparty_ok} counterparty "
+            "(never mislabelled as a destination)"
+        )
+
+    # -- a token contract must never be scored like a wallet ---------------
+    # Two bugs met in the same trace of the real USDT contract, and both were
+    # found by looking at real output rather than by reading the code.
+    #
+    # This block covers the first: the wallet-shaped signals -- fan-in, fan-out,
+    # rapid movement -- describe how a wallet handles money. USDT consolidates
+    # every transfer ever made through it as a matter of design, so applying
+    # them produced CRITICAL 85 for Tether. A reader who sees one absurd score
+    # learns to distrust every score the tool issues, which costs more than the
+    # bug did.
+    #
+    # The suppression must also be *visible*. A signal that was never computed
+    # and left no trace would be indistinguishable from a signal that was
+    # computed and came back negative, so the result has to carry a note saying
+    # the question did not apply.
+    from models.schemas import Chain as _Chain  # noqa: E402
+    import services.risk_engine as risk_engine  # noqa: E402
+    from services.risk_engine import _token_contract_nodes  # noqa: E402
+    from services.token_identity import classify_token  # noqa: E402
+
+    # The real USDT contract, and two contracts that lie about being it. The
+    # second pair were taken from a real trace; both report symbol "USDT" on
+    # chain, and neither is Tether.
+    _real_usdt = "0xdAC17F958D2ee523a2206206994597C13D831ec7"
+    _spoofers = [
+        "0x2c9199362dE4aC2C1035AfEC53F686ad5ACbA9B5",
+        "0x2A1A5b34bC3e4Ce2a9A2F3E56419a7474C609BB5",
+    ]
+
+    _v = classify_token(_Chain.ETHEREUM, _real_usdt, "USDT", "Tether USD", 6)
+    if _v.tier != "verified" or _v.decimals != 6:
+        failures.append(
+            f"TOKEN IDENTITY: the verified USDT contract resolved as "
+            f"{_v.tier} with {_v.decimals} decimals, expected verified/6"
+        )
+    for _s in _spoofers:
+        _sv = classify_token(_Chain.ETHEREUM, _s, "USDT", "Tether USD", 6)
+        if _sv.tier != "spoofed":
+            failures.append(
+                f"TOKEN IDENTITY: {_s} claims the symbol USDT and is not the "
+                f"verified contract, but was classified {_sv.tier}"
+            )
+        elif "USDT" in _sv.display_symbol() and "claims" not in _sv.display_symbol():
+            failures.append(
+                f"TOKEN IDENTITY: spoofed token {_s} is displayed as "
+                f"{_sv.display_symbol()!r}, which a reader could take for the "
+                f"real asset"
+            )
+        elif not _sv.note():
+            failures.append(
+                f"TOKEN IDENTITY: spoofed token {_s} carries no note explaining "
+                f"why its amount cannot be read as USDT"
+            )
+
+    # The registry must be right about the assets it claims to verify, including
+    # the ones whose symbol is not what the asset is conventionally called.
+    # Polygon USDT answers "USDT0" on chain; a registry written from memory would
+    # have recorded "USDT" and then flagged the genuine article as a fake.
+    _poly_usdt = "0xc2132D05D31c914a87C6611C10748AEb04B58e8F"
+    for _reported in ("USDT0", "USDT"):
+        _pv = classify_token(_Chain.POLYGON, _poly_usdt, _reported, "USDT0", 6)
+        if _pv.tier != "verified":
+            failures.append(
+                f"TOKEN IDENTITY: the real Polygon USDT contract reporting "
+                f"{_reported!r} was classified {_pv.tier}; a verified asset is "
+                f"being accused of spoofing"
+            )
+    # A legitimate bridged USDC is not an impostor either.
+    _poly_usdc_e = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
+    _bv = classify_token(_Chain.POLYGON, _poly_usdc_e, "USDC", "USD Coin (PoS)", 6)
+    if _bv.tier != "verified":
+        failures.append(
+            f"TOKEN IDENTITY: the bridged Polygon USDC contract was classified "
+            f"{_bv.tier}; a real bridge asset is being accused of spoofing"
+        )
+    # BSC USDT is 18 decimals where Ethereum USDT is 6. The registry must win
+    # over a provider that reports otherwise, or amounts are wrong by 10^12.
+    _bsc = classify_token(
+        _Chain.BSC, "0x55d398326f99059fF775485246999027B3197955", "USDT", "Tether USD", 6,
+    )
+    if _bsc.decimals != 18:
+        failures.append(
+            f"TOKEN IDENTITY: BSC USDT resolved with {_bsc.decimals} decimals, "
+            f"expected 18 from the verified registry"
+        )
+
+    # Invisible characters in a symbol are a spoofing signal in their own right,
+    # so they are removed from the display and reported, not quietly cleaned.
+    from services.token_identity import sanitize_onchain_text  # noqa: E402
+
+    for _raw, _expect_hidden in (
+        ("US\u200bDT", True), ("US\u202EDT", True), ("USDT", False),
+        ("USD Coin", False), ("", False),
+    ):
+        _clean, _hidden = sanitize_onchain_text(_raw)
+        if _hidden is not _expect_hidden:
+            failures.append(
+                f"TOKEN IDENTITY: sanitizing {_raw!r} reported hidden="
+                f"{_hidden}, expected {_expect_hidden}"
+            )
+        if any(ord(ch) > 0x200B and ord(ch) < 0x2070 for ch in _clean):
+            failures.append(
+                f"TOKEN IDENTITY: sanitizing {_raw!r} left invisible characters "
+                f"in {_clean!r}"
+            )
+
+    # Suppression applies to token contracts, and only to token contracts. A
+    # multisig is a contract and is still a wallet, so it keeps its signals.
+    #
+    # The probe is the real scenario: the subject *is* the token contract, and
+    # it has 9 inbound and 1 outbound, which is exactly the shape that scored
+    # CRITICAL 85 on Tether.
+    _probe = TraceResult.from_dict({
+        "chain": "ethereum", "seed": _real_usdt, "hops": 0,
+        "nodes": [{"address": _real_usdt, "is_seed": True, "inbound": 9, "outbound": 1}],
+        "transactions": [
+            {"chain": "ethereum", "hash": "0x" + "aa" * 32, "from_address": "0x" + "22" * 20,
+             "to_address": _real_usdt, "amount": 1.0, "token_contract": _real_usdt},
+        ],
+    })
+    _probe.metadata.subject_is_contract = True
+    _infra = _token_contract_nodes(_probe)
+    if _real_usdt.lower() not in _infra:
+        failures.append(
+            "RISK CONTRACT: a subject that is both a confirmed contract and the "
+            "contract behind its own transfers was not recognised as "
+            "infrastructure, so its wallet signals would fire"
+        )
+    _scored = risk_engine.assess(_probe)
+    _fan_fired = any(
+        _real_usdt.lower() in {a.lower() for a in (i.related_addresses or [])}
+        for i in _scored.indicators
+    )
+    if _fan_fired:
+        failures.append(
+            "RISK CONTRACT: a fan-in or fan-out signal was raised against a "
+            "token contract, which is the false positive this check exists for"
+        )
+    if not any("token contract" in n for n in _probe.evidence_notes):
+        failures.append(
+            "RISK CONTRACT: signals were suppressed for a token contract with "
+            "no note saying so, so the low score would read as a clean result"
+        )
+
+    # A contract that is NOT a token contract is a wallet that happens to be
+    # code -- a multisig, typically -- and must keep its signals. Getting this
+    # backwards would silently blind the tool on exactly the addresses serious
+    # investigators care about.
+    _multisig = TraceResult.from_dict({
+        "chain": "ethereum", "seed": "0x" + "11" * 20, "hops": 0,
+        "nodes": [{"address": "0x" + "11" * 20, "is_seed": True, "inbound": 9, "outbound": 1}],
+        "transactions": [
+            {"chain": "ethereum", "hash": "0x" + "bb" * 32, "from_address": "0x" + "22" * 20,
+             "to_address": "0x" + "11" * 20, "amount": 1.0, "token_contract": _real_usdt},
+        ],
+    })
+    _multisig.metadata.subject_is_contract = True
+    if "0x" + "11" * 20 in _token_contract_nodes(_multisig):
+        failures.append(
+            "RISK CONTRACT: a contract that is not a token contract was "
+            "classified as infrastructure; a multisig is still a wallet"
+        )
+    _mscored = risk_engine.assess(_multisig)
+    if not any(
+        "0x" + "11" * 20 in {a.lower() for a in (i.related_addresses or [])}
+        for i in _mscored.indicators
+    ):
+        failures.append(
+            "RISK CONTRACT: a multisig subject lost its fan signals; a contract "
+            "that holds funds must still be assessed like a wallet"
+        )
+
+    if not any(f.startswith(("TOKEN IDENTITY", "RISK CONTRACT")) for f in failures):
+        print(
+            "token identity   : verified/spoofed/unverified all resolve; "
+            "registry correct on 3 chains; invisible chars surfaced"
+        )
+        print(
+            "risk contract    : token contracts exempt from wallet signals, and "
+            "the exemption is stated"
+        )
+
     # The OpenAPI document is fetched by the browser. A service-role key or a
     # real provider key showing up in it would be a leak in the one artefact
     # every client can read.

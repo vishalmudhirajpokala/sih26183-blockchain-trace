@@ -325,6 +325,21 @@ class BlockchainTransaction:
     inputs: List[Dict[str, Any]] = field(default_factory=list)
     outputs: List[Dict[str, Any]] = field(default_factory=list)
     provider: Optional[str] = None
+    # Token identity verdict for ERC-20 transfers, from `services.token_identity`.
+    #
+    # `token_tier` is "verified" | "spoofed" | "unverified" | None (native
+    # currency, where there is no contract and nothing to verify). `token_note`
+    # is the sentence a reader needs in order to distrust the amount on this
+    # row -- it is empty for a verified token and populated for everything else.
+    #
+    # These live on the transaction rather than being folded into `asset` alone
+    # because the asset label alone cannot carry the distinction between "USDT"
+    # and "a contract that says it is USDT", and a forensic record that loses
+    # that distinction between the graph and the prose has misrepresented the
+    # evidence.
+    token_tier: Optional[str] = None
+    token_claimed_symbol: Optional[str] = None
+    token_note: str = ""
     raw: Dict[str, Any] = field(default_factory=dict, repr=False)
 
     def to_dict(self, include_raw: bool = False) -> Dict[str, Any]:
@@ -347,6 +362,9 @@ class BlockchainTransaction:
             "inputs": self.inputs,
             "outputs": self.outputs,
             "provider": self.provider,
+            "token_tier": self.token_tier,
+            "token_claimed_symbol": self.token_claimed_symbol,
+            "token_note": self.token_note,
         }
         if include_raw:
             data["raw"] = self.raw
@@ -373,6 +391,9 @@ class BlockchainTransaction:
             inputs=list(data.get("inputs") or []),
             outputs=list(data.get("outputs") or []),
             provider=data.get("provider"),
+            token_tier=data.get("token_tier"),
+            token_claimed_symbol=data.get("token_claimed_symbol"),
+            token_note=data.get("token_note") or "",
             raw=dict(data.get("raw") or {}),
         )
 
@@ -556,6 +577,20 @@ class TraceMetadata:
     # asserts exactly -- does not change.
     flow_shapes: Dict[str, Any] = field(default_factory=dict)
     recommendations: List[Dict[str, Any]] = field(default_factory=list)
+    # Whether the traced address is a deployed contract or an externally-owned
+    # account, and what was done about it.
+    #
+    # Kept under metadata rather than at the top level of the result, for the
+    # same reason `flow_shapes` is: the result's own key set is asserted exactly
+    # by the multi-chain shape test and adding a top-level field would break it
+    # for no benefit.
+    #
+    # `subject_is_contract` is deliberately tri-state. True, False and None mean
+    # "contract", "wallet", and "no node answered, so the question is open" --
+    # and the last of those must never be read as the second, or the wallet
+    # signals get suppressed for an address nobody managed to look up.
+    subject_is_contract: Optional[bool] = None
+    contract_check: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -574,6 +609,8 @@ class TraceMetadata:
             "chain_resolution": self.chain_resolution,
             "flow_shapes": self.flow_shapes,
             "recommendations": self.recommendations,
+            "subject_is_contract": self.subject_is_contract,
+            "contract_check": self.contract_check,
         }
 
     @classmethod
@@ -595,6 +632,8 @@ class TraceMetadata:
             chain_resolution=data.get("chain_resolution"),
             flow_shapes=data.get("flow_shapes") or {},
             recommendations=data.get("recommendations") or [],
+            subject_is_contract=data.get("subject_is_contract"),
+            contract_check=data.get("contract_check"),
         )
 
 

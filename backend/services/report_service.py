@@ -269,18 +269,36 @@ def _plain_summary(result: TraceResult) -> str:
             "statement about the data that came back, not a clean bill of health."
         )
 
-    if result.entity:
-        entity = result.entity
+    origin = _entity_origin(result)
+    entity = origin["entity"]
+    if entity:
         qualifier = (
             "which is a public provider's label rather than an independently "
             "verified identification"
             if entity.source_type.value == "public_provider"
             else f"attributed at the {entity.source_type.value} tier"
         )
-        sentences.append(
-            f"The best-sourced label found anywhere in the trace was "
-            f"{entity.name}, {entity.type.value}, {qualifier}."
-        )
+        if origin["is_subject"]:
+            sentences.append(
+                f"The traced address itself is attributed to {entity.name}, "
+                f"a {entity.type.value}, {qualifier}."
+            )
+        else:
+            # Naming the hop matters. "Binance" reads as a conclusion about
+            # where the money ended up; "an address one hop out is labelled
+            # Binance" is what the data actually supports, and for a subject
+            # like a token contract the two are not remotely the same claim.
+            depth = origin["depth"]
+            where = (
+                f"{depth} hop{'s' if depth != 1 else ''} out"
+                if isinstance(depth, int) else "further out"
+            )
+            sentences.append(
+                f"The traced address carries no attribution of its own; the "
+                f"best-sourced label found in this trace belongs to a "
+                f"counterparty {where}, and reads {entity.name}, "
+                f"a {entity.type.value}, {qualifier}."
+            )
     else:
         sentences.append(
             "No address in this trace carried an attribution from a real source, "
@@ -288,6 +306,119 @@ def _plain_summary(result: TraceResult) -> str:
         )
 
     return " ".join(sentences)
+
+
+def _same_entity(a, b) -> bool:
+    """
+    Value equality for two `EntityAttribution` objects.
+
+    Not `is`. A report is often rendered from a result that came back out of
+    storage, and `TraceResult.from_dict` rebuilds every attribution as a new
+    object -- so the entity on `result` and the entity on the node that produced
+    it are equal but distinct. Identity comparison silently reported "unknown
+    hop, address not listed" for every re-rendered report, and would have
+    mislabelled a labelled *subject* as a counterparty. Comparing the fields
+    that define an attribution is what survives the round trip.
+    """
+    if a is None or b is None:
+        return False
+    return (
+        getattr(a, "name", None) == getattr(b, "name", None)
+        and getattr(a, "type", None) == getattr(b, "type", None)
+        and getattr(a, "source_type", None) == getattr(b, "source_type", None)
+        and getattr(a, "confidence", None) == getattr(b, "confidence", None)
+        and getattr(a, "source_url", None) == getattr(b, "source_url", None)
+    )
+
+
+def _entity_origin(result: TraceResult) -> dict:
+    """
+    Work out whether the reported entity IS the traced address, or is one of the
+    counterparties found along the way.
+
+    This distinction is the difference between a true statement and a false one.
+    `TraceResult.entity` is the best attribution found *anywhere* in the trace,
+    which is the right thing to report and the wrong thing to describe as "the
+    destination". Tracing the USDT contract, for example, resolves
+    "Binance-Hot 7" at hop 1 -- USDT did not send its funds to Binance, Binance
+    is simply one of the thousands of addresses that touched the contract. A
+    report that says "Destination: Binance-Hot 7" about a subject that is USDT
+    states something untrue, and it states it in the most prominent position on
+    page 1.
+
+    So the label follows the evidence: if the attribution belongs to the seed it
+    is reported as the subject's own identity, and if it belongs to a hop it is
+    reported as a counterparty, with the hop it was found at and the address it
+    was found on, so a reader can go and check it.
+    """
+    entity = result.entity
+    if entity is None:
+        return {"entity": None, "is_subject": False, "depth": None, "address": None}
+
+    # The seed's own attribution, if the resolver produced one.
+    if _same_entity(result.seed_entity, entity):
+        return {
+            "entity": entity, "is_subject": True, "depth": 0, "address": result.seed,
+        }
+
+    # Otherwise find the node that carries it, which also gives the depth. The
+    # node whose address is the seed is checked explicitly, because a subject
+    # that is itself labelled may not have gone through `seed_entity`.
+    for node in result.nodes:
+        if _same_entity(node.entity, entity):
+            is_seed = (node.address or "").lower() == (result.seed or "").lower()
+            return {
+                "entity": entity,
+                "is_subject": is_seed,
+                "depth": 0 if is_seed else getattr(node, "depth", None),
+                "address": node.address,
+            }
+
+    # An entity with no node behind it should not happen, but if it ever does,
+    # the honest rendering is "not the subject" rather than a guess.
+    return {"entity": entity, "is_subject": False, "depth": None, "address": None}
+
+
+def _entity_cell(origin: dict, styles) -> Paragraph:
+    """
+    Render the destination/entity row, in whichever form the evidence supports.
+    """
+    entity = origin["entity"]
+    if entity is None:
+        return Paragraph(
+            "<b>No known destination identified.</b> No address in this trace "
+            "carried an attribution from a real source. That is a statement "
+            "about the data that was retrieved, not a claim that these "
+            "addresses are unlabelled everywhere.",
+            styles.body,
+        )
+
+    head = (
+        f"<b>{escape(_text(entity.name))}</b> &mdash; {escape(entity.type.value)}"
+        f"<br/>{entity.confidence}% confidence &mdash; "
+        f"{escape(entity.verification_status.value)}"
+        f"<br/>{escape(entity.source_type.value)}: "
+        f"{escape(_PROVENANCE_NOTE.get(entity.source_type.value, ''))}"
+    )
+
+    if origin["is_subject"]:
+        return Paragraph(
+            head + "<br/><b>This is the traced address itself.</b>",
+            styles.body,
+        )
+
+    depth = origin["depth"]
+    where = (
+        f"at hop {depth}" if isinstance(depth, int)
+        else "somewhere in the trace"
+    )
+    addr = origin["address"]
+    shown = _mono(addr, "") if addr else "an address this report does not list"
+    tail = (
+        f"<br/>Found {where} on {shown} &mdash; a counterparty, <b>not</b> the "
+        f"traced address, which carries no attribution of its own."
+    )
+    return Paragraph(head + tail, styles.body)
 
 
 def render_trace_report(
@@ -339,24 +470,55 @@ def render_trace_report(
     # =================================================================
     story.append(Paragraph("At a glance", styles.section))
 
-    entity = result.entity
-    if entity:
-        destination_cell = Paragraph(
-            f"<b>{escape(_text(entity.name))}</b> &mdash; {escape(entity.type.value)}"
-            f"<br/>{entity.confidence}% confidence &mdash; "
-            f"{escape(entity.verification_status.value)}"
-            f"<br/>{escape(entity.source_type.value)}: "
-            f"{escape(_PROVENANCE_NOTE.get(entity.source_type.value, ''))}",
-            styles.body,
+    # Whether the reported entity is the subject or a counterparty decides how
+    # the row may be worded, so it is established before the row is written.
+    origin = _entity_origin(result)
+    destination_cell = _entity_cell(origin, styles)
+
+    # The contract flag, stated next to the score it changes the meaning of.
+    #
+    # It has to be here rather than in the appendix. When the subject is a token
+    # contract the wallet-pattern signals are not computed, so the number on this
+    # page covers strictly less than it would for a wallet, and a reader who is
+    # not told that will read the absence of CRITICAL findings as a clean result.
+    #
+    # The distinction drawn is token contract versus wallet, not contract versus
+    # EOA. A multisig is a contract and is still a wallet, and a report that told
+    # a reader their multisig was "not a wallet" would be wrong in a way that
+    # undermines every other claim in the document.
+    subject_is_token_contract = (
+        meta.subject_is_contract is True
+        and any(
+            (tx.token_contract or "").strip().lower() == (result.seed or "").strip().lower()
+            for tx in result.transactions
+        )
+    )
+
+    if subject_is_token_contract:
+        subject_note = (
+            "<b>This address is a token contract, not a wallet. Standard "
+            "fraud-pattern signals do not apply.</b> Inbound and outbound fan-in, "
+            "fan-out and rapid-movement patterns describe how a wallet handles "
+            "money, and a token contract consolidates every transfer made through "
+            "it by design. Those signals were not computed, so the risk level "
+            "above reflects the remaining signals only, and their absence is not "
+            "evidence that this token is benign."
+        )
+    elif meta.subject_is_contract is True:
+        subject_note = (
+            "This address is a deployed contract rather than an externally-owned "
+            "account, but it is not the contract behind any transfer in this "
+            "trace, so it is assessed as a wallet — the common case being a "
+            "multisig or smart account, which holds funds and behaves like one."
+        )
+    elif meta.subject_is_contract is None and meta.contract_check:
+        subject_note = (
+            "BlockTrace could not determine whether this address is a contract or "
+            "a wallet, so wallet-pattern signals were computed without that "
+            "context and may reflect the behaviour of a contract."
         )
     else:
-        destination_cell = Paragraph(
-            "<b>No known destination identified.</b> No address in this trace "
-            "carried an attribution from a real source. That is a statement "
-            "about the data that was retrieved, not a claim that these "
-            "addresses are unlabelled everywhere.",
-            styles.body,
-        )
+        subject_note = None
 
     status_text = result.status.value
     if meta.truncated:
@@ -388,6 +550,10 @@ def render_trace_report(
     ], styles, label_width=44 * mm))
 
     story.append(Spacer(1, 2.5 * mm))
+
+    if subject_note:
+        story.append(Paragraph(subject_note, styles.small))
+        story.append(Spacer(1, 2.5 * mm))
 
     # The triage disclaimer, verbatim and unmoved. It is not softened, not
     # shortened, and not relocated to an appendix: the score is the first thing

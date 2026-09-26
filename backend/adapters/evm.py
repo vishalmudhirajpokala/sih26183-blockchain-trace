@@ -43,6 +43,7 @@ from models.schemas import (
 )
 from services.chain_detection import validate_evm_address
 from services.entity_service import classify_public_label, resolve_entity
+from services.token_identity import classify_token
 from utils.http_client import HttpClient
 
 NATIVE_ASSET = {
@@ -75,7 +76,21 @@ _EVM_CHAIN_CONFIG: Dict[Chain, EVMChainConfig] = {
         address_url="https://etherscan.io/address/",
         tx_url="https://etherscan.io/tx/",
         blockscout_base="https://eth.blockscout.com/api/v2",
-        rpc_urls=("https://ethereum-rpc.publicnode.com",),
+        # Several endpoints, tried in order, because this is not a nicety:
+        # `eth_getCode` is how a trace tells a wallet from a contract, and a
+        # silent RPC failure leaves that question open -- which in the output is
+        # indistinguishable from the wallet-pattern risk signals having been
+        # applied to a token contract. The first host here failed TLS
+        # certificate verification while `ethereum.publicnode.com` from the same
+        # provider answered, so the list carries more than one provider rather
+        # than one host.
+        rpc_urls=(
+            "https://ethereum.publicnode.com",
+            "https://eth.drpc.org",
+            "https://1rpc.io/eth",
+            "https://rpc.flashbots.net",
+            "https://ethereum-rpc.publicnode.com",
+        ),
     ),
     Chain.BSC: EVMChainConfig(
         chain=Chain.BSC,
@@ -282,6 +297,29 @@ class EVMAdapter(ChainAdapter):
             ETHERSCAN_V2_URL, params=query, provider="etherscan-v2",
         )
 
+    def is_contract(self, address: str, client: HttpClient) -> Optional[bool]:
+        """
+        Is this address a deployed contract, or an externally-owned account?
+
+        Returns None when the question could not be answered. That distinction is
+        the whole point of returning a tri-state: "no code here, it is a wallet"
+        and "no node answered" are opposite findings, and collapsing them would
+        mean either scoring contracts as wallets again or refusing to score
+        anything at all.
+
+        Asked only about the subject. One call, on the address the trace is
+        about, is enough to stop the wallet-shaped risk signals being applied to
+        a token contract -- and the graph is not walked contract-by-contract,
+        because that would be an RPC call per node to learn something the token
+        registry often already implies.
+        """
+        if not address:
+            return None
+        code = self._rpc(client, "eth_getCode", [address, "latest"])
+        if isinstance(code, str):
+            return code not in ("0x", "0x0", "")
+        return None
+
     def _rpc(
         self, client: HttpClient, method: str, params: Optional[List] = None,
     ) -> Optional[Any]:
@@ -431,6 +469,26 @@ class EVMAdapter(ChainAdapter):
             # and is left out of the value graph.
             return None
 
+        # Resolve this transfer's identity from THIS transfer's own token
+        # contract, then check it against the verified registry.
+        #
+        # Everything above is per-record, and that matters: the provider returns
+        # a `token` object per transfer, and the address is read off that
+        # object, so a symbol can never be inherited from the previous transfer
+        # or from the subject of the trace. What is *not* safe is believing the
+        # symbol -- a contract author chooses it, and choosing it to read "USDT"
+        # is the oldest token trick there is.
+        contract_address = token.get("address_hash") or token.get("address") or _party(token)
+        verdict = classify_token(
+            self.chain,
+            contract_address,
+            reported_symbol=symbol,
+            reported_name=token_info.get("name") or token.get("name"),
+            reported_decimals=decimals,
+        )
+        symbol = verdict.display_symbol()
+        decimals = verdict.decimals
+
         sender = _party(item.get("from"))
         recipient = _party(item.get("to"))
         tx_hash = (
@@ -459,7 +517,7 @@ class EVMAdapter(ChainAdapter):
             from_address=sender,
             to_address=recipient,
             asset=symbol,
-            token_contract=token.get("address_hash") or token.get("address") or _party(token),
+            token_contract=contract_address,
             amount=amount,
             decimals=decimals,
             raw_amount=str(raw_amount),
@@ -470,6 +528,9 @@ class EVMAdapter(ChainAdapter):
             status="success",
             provider=f"blockscout-{self.chain.value}",
             raw=item,
+            token_tier=verdict.tier,
+            token_claimed_symbol=verdict.claimed_symbol,
+            token_note=verdict.note(),
         )
 
     def _from_etherscan(
@@ -492,9 +553,22 @@ class EVMAdapter(ChainAdapter):
             amount = _wei_to_native(record.get("value"))
             raw_amount = record.get("value")
         else:
-            asset = record.get("tokenSymbol")
-            decimals = _int(record.get("tokenDecimal"))
             contract = record.get("contractAddress")
+            # Per-transfer resolution, then verification. Etherscan returns a
+            # `tokenSymbol` and `tokenDecimal` on each record, so this transfer's
+            # values come from this transfer's own token contract and cannot be
+            # inherited from a neighbour. They are still only the contract's
+            # claims about itself, so they go through the registry before being
+            # believed.
+            verdict = classify_token(
+                self.chain,
+                contract,
+                reported_symbol=record.get("tokenSymbol"),
+                reported_name=record.get("tokenName"),
+                reported_decimals=_int(record.get("tokenDecimal")),
+            )
+            asset = verdict.display_symbol()
+            decimals = verdict.decimals
             raw_amount = record.get("value")
             amount = None
             if decimals is not None and raw_amount is not None:
@@ -526,6 +600,9 @@ class EVMAdapter(ChainAdapter):
             confirmations=_int(record.get("confirmations")),
             provider="etherscan-v2",
             raw=record,
+            token_tier=None if native else verdict.tier,
+            token_claimed_symbol=None if native else verdict.claimed_symbol,
+            token_note="" if native else verdict.note(),
         )
 
     def get_outgoing_transfers(

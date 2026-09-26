@@ -25,7 +25,7 @@ Three rules that shape every function here:
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 from models.schemas import (
     AttributionSource,
@@ -170,7 +170,9 @@ def _entity_indicators(result: TraceResult) -> List[RiskIndicator]:
     return indicators
 
 
-def _fan_indicators(result: TraceResult) -> List[RiskIndicator]:
+def _fan_indicators(
+    result: TraceResult, exclude: Optional[Set[str]] = None,
+) -> List[RiskIndicator]:
     """
     Structural signals: how many distinct parties touch each node.
 
@@ -178,10 +180,17 @@ def _fan_indicators(result: TraceResult) -> List[RiskIndicator]:
     many recipients) are the shapes that layer and distribute look like in the
     data. They are equally the shapes of a payroll, a distribution campaign, or
     an exchange's internal bookkeeping, so severity is medium, not high.
+
+    `exclude` holds lowercased addresses that are contracts. A contract's
+    fan-in is a property of the instrument, not behaviour by an actor, so it is
+    not a signal about anything.
     """
+    skip = exclude or set()
     indicators: List[RiskIndicator] = []
 
     for node in result.nodes:
+        if (node.address or "").lower() in skip:
+            continue
         if node.inbound >= 5 and node.inbound > node.outbound:
             indicators.append(RiskIndicator(
                 code="fan_in",
@@ -217,13 +226,20 @@ def _fan_indicators(result: TraceResult) -> List[RiskIndicator]:
     return _collapse(indicators, key="code")
 
 
-def _rapid_hop_indicators(result: TraceResult) -> List[RiskIndicator]:
+def _rapid_hop_indicators(
+    result: TraceResult, exclude: Optional[Set[str]] = None,
+) -> List[RiskIndicator]:
     """
     Funds moving through addresses in a very short window.
 
     Built from real timestamps only. If the provider gave none, this returns
     nothing and says so — it does not assume a hop was fast.
+
+    `exclude` holds lowercased contract addresses. A token contract forwarding
+    value twice in the same block is the contract working, not someone evading
+    a time window.
     """
+    skip = exclude or set()
     indicators: List[RiskIndicator] = []
     by_address: Dict[str, List[BlockchainTransaction]] = defaultdict(list)
     for tx in result.transactions:
@@ -231,6 +247,8 @@ def _rapid_hop_indicators(result: TraceResult) -> List[RiskIndicator]:
             by_address[tx.from_address or ""].append(tx)
 
     for address, txs in by_address.items():
+        if (address or "").lower() in skip:
+            continue
         timed = sorted([t for t in txs if t.timestamp], key=lambda t: t.timestamp)
         for previous, current in zip(timed, timed[1:]):
             gap = (current.timestamp or 0) - (previous.timestamp or 0)
@@ -428,6 +446,48 @@ def _assessment_text(
     return " ".join(parts)
 
 
+def _token_contract_nodes(result: TraceResult) -> Dict[str, str]:
+    """
+    Addresses in this trace that are *token contracts* -- instruments rather
+    than wallets.
+
+    This is deliberately narrower than "is a contract", and the narrowing
+    matters. Plenty of addresses a person or institution genuinely holds funds
+    in are deployed contracts: Gnosis Safes, ERC-4337 accounts, exchange
+    withdrawal contracts, bridge contracts. `vitalik.eth` is a verified
+    multisig, so `eth_getCode` reports code for it, and suppressing its
+    wallet-pattern signals on the strength of that would be wrong -- a multisig
+    *is* a wallet, it just happens to be implemented as one.
+
+    A token contract is different in kind. USDT is not a party to a
+    transaction; it is the thing being moved, and it consolidates every
+    transfer ever made through it as a matter of design. Fan-in on it describes
+    the popularity of the token, not anyone's behaviour.
+
+    So the test is whether the address is the contract behind a transfer in this
+    trace, which is free and is true by construction for every token the trace
+    actually moved. Returns address (lowercased) -> how it was established, so
+    the reader is told the basis rather than shown a flag from nowhere.
+    """
+    found: Dict[str, str] = {}
+
+    for tx in result.transactions:
+        contract = (tx.token_contract or "").strip().lower()
+        if contract and contract not in found:
+            found[contract] = "it is the contract behind a transfer in this trace"
+
+    seed_is_token = (result.seed or "").lower() in found
+    if result.metadata.subject_is_contract is True and seed_is_token:
+        # Both agree, which is the strongest form of the claim, and the one the
+        # report should lead with.
+        found[(result.seed or "").lower()] = (
+            "confirmed against the chain as deployed bytecode, and it is the "
+            "contract behind a transfer in this trace"
+        )
+
+    return found
+
+
 def assess(result: TraceResult) -> RiskAssessment:
     """
     Score one trace. The entry point every caller uses.
@@ -451,8 +511,63 @@ def assess(result: TraceResult) -> RiskAssessment:
 
     indicators: List[RiskIndicator] = []
     indicators += _entity_indicators(result)
-    indicators += _fan_indicators(result)
-    indicators += _rapid_hop_indicators(result)
+
+    # Wallet-shaped signals are only meaningful for wallets.
+    #
+    # Fan-in, fan-out and rapid-movement describe how a *person or account*
+    # handles money: many senders consolidating into one address is a layering
+    # shape. A token contract does that by definition -- USDT consolidates every
+    # transfer ever made in it -- and so does a staking pool and a payment
+    # processor. Scoring them for it produces CRITICAL on Tether, which is not a
+    # finding about Tether and is worse than useless, because a reader who sees
+    # one absurd score learns to distrust every score this tool issues.
+    #
+    # The exclusion is for *token* contracts specifically, not for everything
+    # with code at its address. A multisig is a contract and is still a wallet,
+    # so it keeps its signals.
+    #
+    # The suppression is stated rather than left as a suspiciously low number.
+    # A suppressed signal that leaves no trace reads as a negative result, and a
+    # reader who sees a low score would conclude the address was checked and
+    # found unremarkable -- the exact opposite of what happened.
+    infrastructure = _token_contract_nodes(result)
+    seed_key = (result.seed or "").lower()
+    indicators += _fan_indicators(result, exclude=set(infrastructure))
+    indicators += _rapid_hop_indicators(result, exclude=set(infrastructure))
+
+    if seed_key in infrastructure:
+        basis = infrastructure[seed_key]
+        if result.metadata.subject_is_contract is True:
+            established = "confirmed directly against the chain"
+        else:
+            established = (
+                f"established from the transfers in this trace ({basis}), "
+                f"not confirmed against the chain"
+            )
+        result.evidence_notes.append(
+            "This address is a token contract, not a wallet, and the finding is "
+            f"{established}. Standard fraud-pattern signals do not apply: "
+            "inbound/outbound fan-in, fan-out and rapid-movement patterns "
+            "describe how a wallet handles money, and a token contract "
+            "consolidates every transfer made through it by design. Those "
+            "signals were not computed for it. The risk score reflects the "
+            "remaining signals only, and the absence of wallet-pattern findings "
+            "is not evidence that this token is benign."
+        )
+    elif result.metadata.subject_is_contract is True:
+        # A contract that is not a token contract: almost always a multisig or
+        # smart account, i.e. a wallet that happens to be code. Its wallet-pattern
+        # signals were computed and are meaningful, so the note says that rather
+        # than leaving the reader to wonder whether a contract was penalised.
+        result.evidence_notes.append(
+            "This address is a deployed contract rather than an externally-owned "
+            "account, confirmed against the chain. It is not the contract behind "
+            "any transfer in this trace, so it is treated as a wallet -- the "
+            "common case being a multisig or smart account, which holds funds "
+            "and behaves like one. Wallet-pattern signals were computed for it "
+            "normally."
+        )
+
     indicators += _large_transfer_indicators(result)
     indicators += _round_trip_indicator(result)
 

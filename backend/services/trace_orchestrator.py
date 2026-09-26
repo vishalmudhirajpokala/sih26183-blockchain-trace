@@ -204,7 +204,50 @@ def run_investigation(
     # The strongest attribution reached anywhere in the trace.
     result.entity = _strongest_entity(result)
 
+    # --- 4b. is the subject a contract, or a wallet? ----------------------
+    #
+    # This has to happen before scoring, because the answer decides which signals
+    # are applicable. Fan-in and fan-out describe how a wallet handles money; a
+    # token contract consolidates every transfer made through it by design, so
+    # applying them to one produces a CRITICAL score for Tether that means
+    # nothing. Only EVM adapters answer this -- it is an `eth_getCode` question
+    # and there is no equivalent on TRON or Bitcoin -- so anything else leaves
+    # the flag at None, meaning "not asked", which is deliberately not the same
+    # as False.
+    #
+    # A failure here must not cost the investigator the trace. If the RPC is
+    # unreachable the flag stays None, the signals are computed as before, and
+    # `contract_check` records that the question was open.
+    contract_check: Optional[dict] = None
+    subject_is_contract: Optional[bool] = None
+    is_contract = getattr(adapter, "is_contract", None)
+    if callable(is_contract):
+        try:
+            subject_is_contract = is_contract(normalized, client)
+            contract_check = {
+                "method": "eth_getCode",
+                "result": (
+                    "contract" if subject_is_contract is True
+                    else "externally_owned_account" if subject_is_contract is False
+                    else "undetermined"
+                ),
+            }
+        except Exception as exc:  # noqa: BLE001
+            contract_check = {
+                "method": "eth_getCode",
+                "result": "undetermined",
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+            result.notes.append(
+                f"Contract detection was unavailable for this run ({type(exc).__name__}). "
+                f"Wallet-pattern risk signals were computed without it, so they may "
+                f"reflect the behaviour of a contract rather than of a wallet."
+            )
+
     # --- 5. risk ---------------------------------------------------------
+    # A provisional metadata object carries the contract answer into scoring;
+    # the real one is built in step 6 with the same value.
+    result.metadata.subject_is_contract = subject_is_contract
     result.risk = risk_engine.assess(result)
 
     # --- 6. metadata -----------------------------------------------------
@@ -255,6 +298,8 @@ def run_investigation(
         # boundary and no address is dropped.
         truncation_reasons=list(dict.fromkeys(adapter_trace.truncation_reasons)),
         chain_resolution=chain_resolution,
+        subject_is_contract=subject_is_contract,
+        contract_check=contract_check,
     )
 
     # Flow-shape classification, computed once the result is whole.
