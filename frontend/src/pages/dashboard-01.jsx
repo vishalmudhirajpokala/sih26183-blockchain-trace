@@ -128,9 +128,16 @@ export default function Dashboard01() {
         note: source ? `Source: ${source}` : "From saved investigations only",
       },
       {
-        label: "Distinct Entities",
+        label: "Attributed Entities",
         value: count(distinctNames),
-        note: "Named entities across your saved results",
+        // Spelled "Attributed" rather than "Distinct" because the figure counts
+        // addresses a real source has *named*, not every distinct address seen.
+        // "Distinct" reads as "how many addresses were in my investigations",
+        // which this is not -- so a zero would look like the investigations
+        // themselves were empty. A zero here means no address could be named.
+        note: count(distinctNames)
+          ? "Addresses a real source named, across your saved results"
+          : "No address could be named here. Addresses in your investigations are still traced, graphed and scored.",
       },
       {
         // `reports` is a sibling of `data_basis`, not a field inside it.
@@ -211,15 +218,15 @@ export default function Dashboard01() {
       */}
       <PageHeader
         eyebrow="Overview"
-        title="Blockchain Intelligence Dashboard"
+        title="Your investigations"
         description={
           basis.note ||
-          "Statistics over the investigations you have saved. These describe your own cases, not the chain as a whole."
+          "Every figure below comes from investigations you have saved on this deployment. Paste a wallet or transaction on the Trace page to start one."
         }
         actions={
-          <Button render={<Link to="/app/trace" />}>
+          <Button size="lg" render={<Link to="/app/trace" />}>
             <Search data-icon="inline-start" />
-            New trace
+            Trace a wallet
           </Button>
         }
       />

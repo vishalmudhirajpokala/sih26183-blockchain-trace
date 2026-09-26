@@ -16,6 +16,7 @@ import { NavLink, useLocation } from "react-router-dom";
 import {
   SidebarGroup,
   SidebarGroupContent,
+  SidebarGroupLabel,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
@@ -33,11 +34,12 @@ export function isRouteActive(pathname, to) {
   return current === target || current.startsWith(`${target}/`);
 }
 
-export function NavMain({ items }) {
+export function NavMain({ items, label = null }) {
   const { pathname } = useLocation();
 
   return (
     <SidebarGroup>
+      {label ? <SidebarGroupLabel>{label}</SidebarGroupLabel> : null}
       <SidebarGroupContent className="flex flex-col gap-2">
         <SidebarMenu>
           {items.map((item) => (

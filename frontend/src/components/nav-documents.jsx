@@ -21,12 +21,12 @@ import {
 
 import { isRouteActive } from "@/components/nav-main";
 
-export function NavDocuments({ items }) {
+export function NavDocuments({ items, label = "Intelligence" }) {
   const { pathname } = useLocation();
 
   return (
     <SidebarGroup>
-      <SidebarGroupLabel>Intelligence</SidebarGroupLabel>
+      <SidebarGroupLabel>{label}</SidebarGroupLabel>
       <SidebarMenu>
         {items.map((item) => (
           <SidebarMenuItem key={item.to ?? item.name}>

@@ -46,20 +46,37 @@ import { useAuth } from "@/hooks/use-auth";
 import { api } from "@/lib/api";
 import { CHAIN_ORDER, chainShort } from "@/lib/format";
 
+/**
+ * Navigation grouped by what an investigator is doing, not by what the app is
+ * built from.
+ *
+ * The previous grouping was "Investigation" (dashboard, trace, investigations,
+ * risk) then "Intelligence" (reports, entities), which split the workflow in
+ * half: opening a case and exporting it lived in different sections, and
+ * "Network Explorer" sat apart in the footer next to Help as though chain
+ * health were a support topic rather than an investigation one.
+ *
+ * The order now follows the job. Start a trace, then find the cases and outputs
+ * that come out of it, then the aggregate views across cases.
+ *
+ * Every entry is a route that already existed. Nothing was added or removed.
+ */
 const data = {
-  navMain: [
+  investigate: [
     { title: "Dashboard", to: "/app", icon: <LayoutDashboard /> },
-    { title: "Trace Console", to: "/app/trace", icon: <Search /> },
-    { title: "Investigations", to: "/app/investigations", icon: <FileSearch /> },
-    { title: "Risk Analytics", to: "/app/risk", icon: <BarChart3 /> },
+    { title: "Trace a Wallet", to: "/app/trace", icon: <Search /> },
   ],
-  navSecondary: [
-    { title: "Network Explorer", to: "/app/network", icon: <GitBranch /> },
-    { title: "Help & Method", to: "/app/help", icon: <CircleHelp /> },
-  ],
-  documents: [
+  cases: [
+    { name: "Investigations", to: "/app/investigations", icon: <FileSearch /> },
     { name: "Investigation Reports", to: "/app/reports", icon: <FileChartColumn /> },
     { name: "Entity Intelligence", to: "/app/entities", icon: <ShieldCheck /> },
+  ],
+  analytics: [
+    { title: "Risk Analytics", to: "/app/risk", icon: <BarChart3 /> },
+    { title: "Network Explorer", to: "/app/network", icon: <GitBranch /> },
+  ],
+  navSecondary: [
+    { title: "Help & Method", to: "/app/help", icon: <CircleHelp /> },
   ],
 };
 
@@ -163,17 +180,11 @@ export function AppSidebar({ ...props }) {
       </SidebarHeader>
 
       <SidebarContent>
-        <div className="px-2 pb-2 pt-3 text-xs font-medium text-muted-foreground">
-          Investigation
-        </div>
+        <NavMain items={data.investigate} label="Investigate" />
 
-        <NavMain items={data.navMain} />
+        <NavDocuments items={data.cases} label="Cases" />
 
-        <div className="px-2 pb-2 pt-5 text-xs font-medium text-muted-foreground">
-          Intelligence
-        </div>
-
-        <NavDocuments items={data.documents} />
+        <NavMain items={data.analytics} label="Analytics" />
 
         <NavSecondary items={data.navSecondary} className="mt-auto" />
       </SidebarContent>

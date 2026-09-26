@@ -121,7 +121,7 @@ export default function Entities() {
       <PageHeader
         eyebrow="Attribution"
         title="Entity intelligence"
-        description="Addresses your own traces attributed, each with where the attribution came from. Nothing here is pre-seeded: an address appears because a trace you ran surfaced it."
+        description="Addresses this deployment can put a name to, each with the source of that name. Nothing is pre-seeded, and an address appears here only when a real attribution source claims it."
       />
 
       <SectionCard
@@ -185,11 +185,44 @@ export default function Entities() {
       ) : rows.length === 0 ? (
         <EmptyState
           icon={Users}
-          title={filtered ? "No entities match these filters" : "No entities attributed yet"}
-          description={
+          title={
             filtered
-              ? "Nothing in your investigations matches that combination. Clearing a filter may show more."
-              : "Entity rows are created when a trace resolves a label for an address. Run a trace on an address that transacts with a known service, exchange, or mixer."
+              ? "No entities match these filters"
+              : "No curated attribution available in this deployment"
+          }
+          description={
+            filtered ? (
+              "Nothing in your investigations matches that combination. Clearing a filter may show more."
+            ) : (
+              /*
+                The honest version of an empty page, and the wording matters.
+
+                This deployment ships without a licensed VASP/attribution dataset,
+                so no address can be *named*. Saying "no entities yet" would imply
+                a trace had not been run and that running one would fill this
+                table. It might not: a row appears only when a real source
+                attributes an address, and this deployment has none loaded.
+
+                So the page says what is actually missing -- the dataset -- and
+                points at the capability that works without one, rather than
+                implying the investigation found nothing.
+              */
+              <>
+                Naming an address &mdash; &ldquo;this is an exchange&rdquo;,
+                &ldquo;this is a sanctioned service&rdquo; &mdash; requires a
+                curated attribution dataset. This deployment has none loaded, so
+                no address can be named.{" "}
+                <strong className="text-foreground">
+                  That is not a statement about your investigations.
+                </strong>{" "}
+                Every address a trace touched is still graphed, scored and
+                listed in full on the investigation itself, and each one is
+                classified by how it behaves &mdash; whether it only receives,
+                whether it scatters value onward, whether it behaves like a
+                deposit address. That classification is a pattern, not an
+                identification, and is shown as such on the investigation.
+              </>
+            )
           }
           action={
             filtered ? (

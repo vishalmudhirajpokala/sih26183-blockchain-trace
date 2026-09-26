@@ -25,6 +25,7 @@ import { RefreshCw } from "lucide-react";
 import { api } from "@/lib/api";
 import { formatCount, formatDateTime, formatTimestamp } from "@/lib/format";
 import {
+  Disclosure,
   ErrorPanel,
   LoadingBlock,
   PageHeader,
@@ -150,19 +151,29 @@ function ChainCard({ entry }) {
             {entry.block_time_source}
           </ValueRow>
         ) : null}
-
-        <ValueRow label="Provider" mono={false}>
-          {entry?.provider || null}
-        </ValueRow>
-
-        <ValueRow
-          label="Checked at"
-          mono={false}
-          reason="Every figure above was fetched on this request and is not cached."
-        >
-          {entry?.checked_at ? formatDateTime(entry.checked_at) : null}
-        </ValueRow>
       </dl>
+
+      {/*
+        Which provider served this, and when it was asked, is audit
+        information: it is how you check that a figure was measured rather than
+        remembered, and how an analyst tells a provider outage apart from a chain
+        that genuinely stopped. None of it helps decide whether a wallet can be
+        traced here, so it is one disclosure rather than three permanent rows.
+      */}
+      <Disclosure label="Provider and timing" className="mt-1" bodyClassName="text-xs">
+        <dl className="divide-y">
+          <ValueRow label="Provider" mono={false}>
+            {entry?.provider || null}
+          </ValueRow>
+          <ValueRow
+            label="Checked at"
+            mono={false}
+            reason="Every figure above was fetched on this request and is not cached."
+          >
+            {entry?.checked_at ? formatDateTime(entry.checked_at) : null}
+          </ValueRow>
+        </dl>
+      </Disclosure>
 
       {Array.isArray(entry?.evidence_notes) && entry.evidence_notes.length ? (
         <ul className="mt-4 space-y-2 border-t pt-3 text-xs leading-5 text-muted-foreground">
@@ -204,8 +215,8 @@ export default function Network() {
     <div className="space-y-8 px-6 py-8">
       <PageHeader
         eyebrow="Network"
-        title="Network status"
-        description="Live per-chain status as reported by the providers this deployment uses. Every figure is fetched on request and is never cached or estimated."
+        title="Which chains this deployment can trace"
+        description="Checked live against the providers BlockTrace queries. A chain that is reachable here can be traced end to end; a chain that is not will report a provider problem rather than an empty result."
         actions={
           <Button
             variant="outline"

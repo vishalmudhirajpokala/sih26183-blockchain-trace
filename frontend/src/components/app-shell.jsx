@@ -26,7 +26,7 @@ import { useAuth } from "@/hooks/use-auth";
  * every page rather than only on the sign-in screen where it is easy to miss.
  */
 function AccessBanner() {
-  const { isDemo, status } = useAuth();
+  const { isDemo } = useAuth();
   if (!isDemo) return null;
 
   return (
@@ -36,7 +36,16 @@ function AccessBanner() {
         <strong className="font-semibold">Demo mode.</strong> No account is
         signed in. Cases are stored in a local JSON file and are visible to
         anyone using this deployment — do not enter real case data.
-        {status?.note ? <span className="ml-1 opacity-80">{status.note}</span> : null}
+        {/*
+          `status.note` is deliberately NOT rendered here. It is the server's
+          deployment note — "Configure SUPABASE_URL and SUPABASE_ANON_KEY and set
+          BLOCKTRACE_DEMO_MODE=false to require sign-in" — which is operator
+          documentation, not product copy. It appeared under this banner on every
+          page, so anyone trying the prototype had to read how to deploy it before
+          they could use it. Help/Method is where someone who wants to deploy will
+          look for it; the banner says only what a user needs, which is that
+          nothing here is private.
+        */}
       </p>
     </div>
   );

@@ -28,6 +28,7 @@ import {
   statusInfo,
 } from "@/lib/format";
 import {
+  Disclosure,
   EmptyState,
   ErrorPanel,
   LoadingBlock,
@@ -325,19 +326,13 @@ export default function RiskAnalytics() {
             </div>
 
             <aside className="space-y-6">
-              <SectionCard title="What this data is">
-                <ValueRow label="Source">{basis.source || null}</ValueRow>
-                <ValueRow label="Cases analysed" mono>
-                  {formatCount(analysed)}
-                </ValueRow>
-                <ValueRow label="Cases on record" mono>
-                  {count(basis.investigation_count)}
-                </ValueRow>
-                <p className="mt-3 text-sm leading-6 text-muted-foreground">
-                  {basis.note}
-                </p>
-              </SectionCard>
-
+              {/*
+                Provenance last, not first.
+                "What this data is" was the first card in this column, so a
+                reader met the word "Source" and a basis note before any finding.
+                It is real and it should be checkable -- so it is still here, one
+                disclosure below, and the score summary it qualifies leads instead.
+              */}
               <SectionCard title="Score summary">
                 {scores.length === 0 ? (
                   <NotAvailable reason="No scores recorded." />
@@ -380,6 +375,27 @@ export default function RiskAnalytics() {
                   ) : null}
                 </SectionCard>
               ) : null}
+
+              {/*
+                The provenance of everything above, collapsed and last. Nothing
+                here is removed: an analyst can still confirm the sample, where
+                it came from, and what the figures do and do not cover -- they
+                just have to ask for it rather than read past it.
+              */}
+              <Disclosure label="What this data is" bodyClassName="text-xs">
+                <dl className="divide-y">
+                  <ValueRow label="Source">{basis.source || null}</ValueRow>
+                  <ValueRow label="Cases analysed" mono>
+                    {formatCount(analysed)}
+                  </ValueRow>
+                  <ValueRow label="Cases on record" mono>
+                    {count(basis.investigation_count)}
+                  </ValueRow>
+                </dl>
+                <p className="mt-2 text-xs leading-5 text-muted-foreground">
+                  {basis.note}
+                </p>
+              </Disclosure>
 
               {entities.distinct_names ? (
                 <SectionCard title="Attributed entities">
