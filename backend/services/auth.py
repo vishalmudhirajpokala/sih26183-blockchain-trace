@@ -98,8 +98,19 @@ def resolve_identity(authorization: Optional[str] = None) -> Dict[str, Any]:
     token = _bearer_token(authorization)
 
     if not token:
-        if config.has_supabase():
-            return {"state": AuthState.UNAVAILABLE, "user_id": None, "email": None, "token": None}
+        # Demo mode is checked FIRST, and that ordering is load-bearing.
+        #
+        # These two checks used to be the other way round, with
+        # `has_supabase()` first. That meant merely adding SUPABASE_URL and
+        # SUPABASE_ANON_KEY to the environment -- the step every deployment
+        # takes before it is ready to require sign-in -- silently turned a demo
+        # deployment into a locked one, and every route began answering 401.
+        # The operator had configured accounts and had not yet asked for them.
+        #
+        # Demo mode is a statement that no credential is required, so it holds
+        # whether or not a Supabase project happens to be configured. Only when
+        # demo mode is off does it matter whether Supabase is present: present
+        # means "sign in", absent means "locked, and cannot be unlocked".
         if config.DEMO_MODE:
             return {
                 "state": AuthState.ANONYMOUS,
@@ -107,6 +118,8 @@ def resolve_identity(authorization: Optional[str] = None) -> Dict[str, Any]:
                 "email": ANONYMOUS_EMAIL,
                 "token": None,
             }
+        if config.has_supabase():
+            return {"state": AuthState.UNAVAILABLE, "user_id": None, "email": None, "token": None}
         return {"state": AuthState.UNAVAILABLE, "user_id": None, "email": None, "token": None}
 
     client = _supabase_anon()
