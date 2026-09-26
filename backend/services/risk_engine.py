@@ -546,12 +546,15 @@ def _assessment_text(
         "data. They indicate where an investigation should focus; they are not a "
         "determination of intent or wrongdoing."
     )
-    attribution = _attribute_signals(result, indicators)
-    if attribution.get("counterparty"):
-        # Stated in the prose as well as in the report table, because the prose
-        # is what gets quoted when a finding is passed on, and a score quoted
-        # without its provenance becomes a claim about the wrong address.
-        parts.append(_attribution_sentence(attribution))
+    # Deliberately NOT appending the signal attribution here.
+    #
+    # `assessment` is the engine's verdict sentence; `signal_attribution` is a
+    # separate structured fact about which address each signal was raised
+    # against. Blending the two into the prose put the "this score aggregates
+    # the whole graph" caveat on every surface twice -- once here, once in the
+    # provenance block that both the report and the console render. A caveat
+    # stated twice reads as emphasis and is really just noise, and the copy that
+    # gets trimmed by whoever tidies the page is the one carrying the warning.
     return " ".join(parts)
 
 

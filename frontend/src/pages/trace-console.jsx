@@ -32,14 +32,15 @@ import {
 } from "lucide-react";
 
 import {
+  Disclosure,
   EmptyState,
   ErrorPanel,
   EvidenceNotes,
   LoadingBlock,
   PageHeader,
   ProviderLedger,
+  RiskBadge,
   SectionCard,
-  StatGrid,
   ValueRow,
 } from "@/components/common";
 import { Button } from "@/components/ui/button";
@@ -57,7 +58,7 @@ import { TransactionTable } from "@/components/transaction-table";
 import { RiskPanel } from "@/components/risk-panel";
 import { api, reportHref } from "@/lib/api";
 import { EXAMPLE_TRACES, shortAddress } from "@/lib/example-traces";
-import { CHAIN_ORDER, chainLabel, statusInfo, truncateHash } from "@/lib/format";
+import { CHAIN_ORDER, chainLabel, statusInfo } from "@/lib/format";
 
 /** How long to wait after the last keystroke before asking the detector. */
 const DETECT_DEBOUNCE_MS = 320;
@@ -305,6 +306,97 @@ function AdvancedOptions({ options, setOptions, disabled, recommended, chain, se
 }
 
 /** The finished result, rendered in the order an investigator reads it. */
+/**
+ * The addresses a trace actually reached, as a list.
+ *
+ * The graph shows the shape of the flow; this shows the inventory. Both are
+ * views of the same nodes and neither replaces the other, so it lives behind a
+ * disclosure rather than on the first screen: a reader looking for "which
+ * addresses did this touch" wants a list, and a reader looking for "how did the
+ * money move" wants the picture, and only one of them is the question they
+ * arrived with.
+ *
+ * Attribution is shown per address rather than only for the trace overall,
+ * because "which of these are labelled" is the question the whole product
+ * exists to answer, and it is answerable per address.
+ */
+function AddressTable({ nodes }) {
+  if (!nodes.length) {
+    return (
+      <p className="px-4 py-3 text-xs text-muted-foreground">
+        No addresses were returned for this run.
+      </p>
+    );
+  }
+
+  const ordered = [...nodes].sort((a, b) => {
+    if (a.is_seed !== b.is_seed) return a.is_seed ? -1 : 1;
+    const da = typeof a.depth === "number" ? a.depth : 99;
+    const db = typeof b.depth === "number" ? b.depth : 99;
+    if (da !== db) return da - db;
+    return String(a.address || "").localeCompare(String(b.address || ""));
+  });
+
+  return (
+    <ul className="divide-y">
+      {ordered.map((node) => (
+        <li
+          key={node.address}
+          className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 text-xs"
+        >
+          <span className="font-mono break-all">{node.address}</span>
+          {node.is_seed ? (
+            <span className="shrink-0 rounded border border-border px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-muted-foreground">
+              Traced
+            </span>
+          ) : null}
+          {typeof node.depth === "number" ? (
+            <span className="shrink-0 text-muted-foreground">hop {node.depth}</span>
+          ) : null}
+          {node.entity ? (
+            <span className="shrink-0 text-muted-foreground">
+              {node.entity.name} · {String(node.entity.type || "").replace(/_/g, " ")} ·{" "}
+              {node.confidence}% · {String(node.source_type || "").replace(/_/g, " ")}
+            </span>
+          ) : (
+            <span className="shrink-0 text-muted-foreground">no attribution</span>
+          )}
+          <span className="shrink-0 text-muted-foreground">
+            in {node.inbound ?? 0} / out {node.outbound ?? 0}
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/**
+ * A one-line, plain-English description of what this run actually covered.
+ *
+ * Generated from the recorded values rather than templated per case, so it
+ * cannot claim more reach than the run had. The clause after the dash is a
+ * pointer rather than a summary: the reader is being told that the limits are
+ * documented below, which is the honest thing to do when the answer is
+ * "some of it".
+ */
+function coverageLine(result, meta) {
+  const hops = typeof meta.max_depth_reached === "number" ? meta.max_depth_reached : null;
+  const addresses = typeof meta.nodes_examined === "number" ? meta.nodes_examined : null;
+  const transfers =
+    typeof meta.transactions_inspected === "number" ? meta.transactions_inspected : null;
+
+  const bits = [];
+  if (hops !== null) bits.push(`${hops} hop${hops === 1 ? "" : "s"}`);
+  if (addresses !== null) bits.push(`${addresses} address${addresses === 1 ? "" : "es"}`);
+  if (transfers !== null) bits.push(`${transfers} transfer${transfers === 1 ? "" : "s"}`);
+
+  const covered = bits.length ? bits.join(", ") : "no addresses";
+  const limited = meta.truncated ? "Trace limited to" : "Trace covered";
+  return meta.truncated
+    ? `${limited} ${covered} — see below for what was and wasn't examined`
+    : `${limited} ${covered}`;
+}
+
 function ResultPanel({ response, onReset }) {
   const navigate = useNavigate();
   const result = response.result || {};
@@ -313,66 +405,168 @@ function ResultPanel({ response, onReset }) {
   const status = statusInfo(result.status);
   const href = reportHref(response.report_url || result.report);
 
-  // Derived during render rather than memoized. `result` is an object from
-  // the response, so its identity is fresh on every render and a useMemo keyed
-  // on it would recompute every render anyway while also re-running on every
-  // unrelated change. `response.result` is set once when a trace completes and
-  // is replaced whole on reset, so the primitive inputs below are what
-  // actually determine the values.
   const nodeCount = (result.nodes || []).length;
   const transferCount = (result.transactions || []).length;
   const durationMs = meta.duration_ms;
-  const stats = [
-    { label: "Chain", value: result.chain_name || chainLabel(result.chain) },
-    { label: "Addresses", value: nodeCount },
-    { label: "Transfers", value: transferCount },
-    {
-      label: "Duration",
-      value: typeof durationMs === "number" ? `${durationMs} ms` : null,
-    },
-  ];
+
+  // The entity is the best attribution found anywhere in the trace, which is
+  // usually a counterparty rather than the subject. Labelling it "destination"
+  // would be a stronger claim than the data supports, so the hero says what it
+  // actually is and the report's fuller treatment lives in the PDF.
+  const entity = result.entity || null;
+  const entityLabel = entity
+    ? `${entity.name} — ${String(entity.type || "").replace(/_/g, " ")}`
+    : "No entity identified";
+
+  const contractNote = (result.evidence_notes || []).find(
+    (n) => typeof n === "string" && n.includes("token contract"),
+  );
+  const otherNotes = (result.evidence_notes || []).filter((n) => n !== contractNote);
+
+  // Provider calls, summarised. The full per-call log is one keystroke away, but
+  // a reader's first question is whether anything failed, and that is answered
+  // by a count rather than by scrolling sixty-five rows of "HTTP 200".
+  const usage = meta.provider_usage || [];
+  const failed = usage.filter((p) => !p.ok);
+  const latencies = usage
+    .map((p) => p.latency_ms)
+    .filter((v) => typeof v === "number" && Number.isFinite(v));
+  const avgLatency = latencies.length
+    ? Math.round(latencies.reduce((a, b) => a + b, 0) / latencies.length)
+    : null;
+  const providerSummary = !usage.length
+    ? "No provider calls were made"
+    : failed.length
+      ? `${usage.length} provider calls, ${failed.length} failed`
+      : `${usage.length} provider calls, all succeeded${
+          avgLatency !== null ? `, avg ${avgLatency}ms` : ""
+        }`;
 
   return (
     <div className="space-y-6">
+      {/*
+        The hero: the four things a reader came for, in the order they ask for
+        them. What was traced, who it turned out to involve, how risky, and how
+        far the run actually got.
+
+        The risk level appears here and nowhere else on this page. It used to be
+        repeated by the outcome block, the risk panel badge, the score bar and
+        the indicators header, which is four statements of one conclusion and a
+        strong hint that none of them was the real one.
+      */}
       <SectionCard
-        title="Outcome"
-        description={status.meaning}
+        bodyClassName="space-y-4"
         action={
           <Button size="sm" variant="outline" onClick={onReset}>
             <RotateCcwIcon />
             New trace
           </Button>
         }
-        bodyClassName="space-y-4"
       >
-        <div
-          className={`rounded-md border px-4 py-3 ${
-            status.tone === "negative"
-              ? "border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-950/40"
-              : status.tone === "caution"
-                ? "border-amber-200 bg-amber-50 dark:border-amber-900 dark:bg-amber-950/40"
-                : status.tone === "positive"
-                  ? "border-emerald-200 bg-emerald-50 dark:border-emerald-900 dark:bg-emerald-950/40"
-                  : "border-border bg-muted/40"
-          }`}
-        >
-          <div className="flex flex-wrap items-center gap-3">
-            <span className="text-sm font-semibold">{status.short}</span>
-            <span className="font-mono text-xs text-muted-foreground">
-              {truncateHash(result.seed)}
-            </span>
-          </div>
-          {result.status_detail ? (
-            <p className="mt-1 text-xs text-muted-foreground">{result.status_detail}</p>
+        <div className="space-y-1">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            Subject wallet
+          </p>
+          <p className="font-mono text-sm break-all">{result.seed}</p>
+        </div>
+
+        <div className="space-y-1">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            Entity identified
+          </p>
+          <p className="text-sm">
+            {entity ? (
+              <>
+                <span className="font-medium">{entity.name}</span>
+                <span className="text-muted-foreground">
+                  {" "}
+                  — {String(entity.type || "").replace(/_/g, " ")},{" "}
+                  {entity.confidence}% confidence,{" "}
+                  {String(entity.verification_status || "").replace(/_/g, " ")}
+                </span>
+              </>
+            ) : (
+              <span className="text-muted-foreground">{entityLabel}</span>
+            )}
+          </p>
+          {entity ? (
+            <p className="text-[10px] leading-4 text-muted-foreground">
+              Best attribution found anywhere in this trace, not necessarily the
+              traced address itself.
+            </p>
           ) : null}
         </div>
 
-        <StatGrid items={stats} />
+        <div className="space-y-1">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            Risk
+          </p>
+          <RiskBadge
+            level={risk.risk_level}
+            score={typeof risk.risk_score === "number" ? risk.risk_score : null}
+          />
+        </div>
 
-        <EvidenceNotes notes={result.evidence_notes} />
+        <div className="space-y-1">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            Coverage
+          </p>
+          <p className="text-sm text-muted-foreground">
+            {coverageLine(result, meta)}
+          </p>
+          {result.status_detail ? (
+            <p className="mt-1 text-xs text-muted-foreground">
+              {result.status_detail}
+            </p>
+          ) : null}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          {response.investigation_id ? (
+            <Button
+              size="sm"
+              onClick={() => navigate(`/app/investigations/${response.investigation_id}`)}
+            >
+              Open investigation
+            </Button>
+          ) : null}
+          {href ? (
+            <Button
+              size="sm"
+              variant="outline"
+              render={<a href={href} target="_blank" rel="noreferrer noopener" />}
+            >
+              Open PDF report
+            </Button>
+          ) : null}
+          {!response.investigation_id ? (
+            <span className="text-xs text-muted-foreground">
+              This run was not saved to history.
+            </span>
+          ) : null}
+          <span className="text-[10px] text-muted-foreground">
+            {result.chain_name || chainLabel(result.chain)} ·{" "}
+            {status.short}
+            {typeof durationMs === "number" ? ` · ${durationMs} ms` : ""}
+          </span>
+        </div>
+
+        {/*
+          The contract-vs-wallet explanation sits directly under the hero, where
+          it changes how the score above should be read. It used to sit after the
+          stats row inside the outcome block, which put a paragraph of caveat
+          between the reader and the number it qualifies.
+        */}
+        {contractNote ? (
+          <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs leading-5 text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+            {contractNote}
+          </p>
+        ) : null}
+        {otherNotes.length ? <EvidenceNotes notes={otherNotes} /> : null}
       </SectionCard>
 
-      <RiskPanel risk={risk} chain={result.chain} />
+      {/* compact: the hero above owns the level and score. */}
+      <RiskPanel risk={risk} chain={result.chain} compact />
 
       <SectionCard
         title="Fund flow"
@@ -391,9 +585,19 @@ function ResultPanel({ response, onReset }) {
         />
       </SectionCard>
 
-      <SectionCard
-        title="Normalized transactions"
-        description="The same shape on every chain. TRON amounts arrive already divided out of SUN by the adapter, so no client-side conversion happens here."
+      {/*
+        The three tables below are complete, not samples, and none of them is
+        truncated to make the page shorter -- they are collapsed so the first
+        screen is the finding. Each states its own size in the collapsed header,
+        so a reader knows what they are not looking at before deciding to look.
+      */}
+      <Disclosure
+        label="Transaction ledger"
+        hint={
+          transferCount
+            ? `${transferCount} transfer${transferCount === 1 ? "" : "s"} found`
+            : "no transfers retrieved"
+        }
         bodyClassName="p-0"
       >
         <TransactionTable
@@ -401,7 +605,23 @@ function ResultPanel({ response, onReset }) {
           chain={result.chain}
           seed={result.seed}
         />
-      </SectionCard>
+      </Disclosure>
+
+      <Disclosure
+        label="Addresses examined"
+        hint={
+          nodeCount
+            ? `${nodeCount} address${nodeCount === 1 ? "" : "es"} in the graph`
+            : "no addresses retrieved"
+        }
+        bodyClassName="p-0"
+      >
+        <AddressTable nodes={result.nodes || []} />
+      </Disclosure>
+
+      <Disclosure label="Provider activity" hint={providerSummary} bodyClassName="pt-2">
+        <ProviderLedger usage={usage} />
+      </Disclosure>
 
       <SectionCard title="Provenance and method" bodyClassName="space-y-1 pt-2">
         <ValueRow label="Investigation id" mono copyable>
@@ -413,35 +633,42 @@ function ResultPanel({ response, onReset }) {
         <ValueRow label="Max depth reached">
           {typeof meta.max_depth_reached === "number" ? meta.max_depth_reached : null}
         </ValueRow>
+        <ValueRow label="Depth limit">
+          {typeof meta.depth_limit === "number" ? meta.depth_limit : null}
+        </ValueRow>
         <ValueRow label="Addresses examined">
           {typeof meta.nodes_examined === "number" ? meta.nodes_examined : null}
+        </ValueRow>
+        <ValueRow label="Transfers inspected">
+          {typeof meta.transactions_inspected === "number"
+            ? meta.transactions_inspected
+            : null}
         </ValueRow>
         <ValueRow label="Truncated">
           {meta.truncated === undefined ? null : meta.truncated ? "Yes" : "No"}
         </ValueRow>
-        <ProviderLedger usage={meta.provider_usage || []} className="pt-3" />
+        {meta.subject_is_contract !== undefined ? (
+          <ValueRow label="Subject is a contract">
+            {meta.subject_is_contract === null
+              ? "Could not be determined"
+              : meta.subject_is_contract
+                ? "Yes"
+                : "No"}
+          </ValueRow>
+        ) : null}
+        {/*
+          Chain-agnostic, and it has to be. This line used to say "TRON amounts
+          arrive already divided out of SUN by the adapter" unconditionally, so an
+          Ethereum trace explained TRON's unit convention to a reader looking at
+          an ERC-20 amount. The division is real on every chain; only the unit
+          named was chain-specific.
+        */}
+        <p className="pt-2 text-[10px] leading-4 text-muted-foreground">
+          Amounts are shown in each asset's own units, already converted by the
+          adapter from the raw on-chain integer using that token contract's
+          decimals. No conversion happens in the browser.
+        </p>
       </SectionCard>
-
-      <div className="flex flex-wrap items-center gap-2">
-        {response.investigation_id ? (
-          <Button onClick={() => navigate(`/app/investigations/${response.investigation_id}`)}>
-            Open investigation
-          </Button>
-        ) : null}
-        {/* A link only when one genuinely exists. Its absence is not reported as
-            a problem: the report is optional and available from the
-            investigation page, so a missing file here needs no explanation. */}
-        {href ? (
-          <Button variant="outline" render={<a href={href} target="_blank" rel="noreferrer noopener" />}>
-            Open PDF report
-          </Button>
-        ) : null}
-        {!response.investigation_id ? (
-          <span className="text-xs text-muted-foreground">
-            This run was not saved to history.
-          </span>
-        ) : null}
-      </div>
     </div>
   );
 }
@@ -778,6 +1005,46 @@ export default function TraceConsole() {
             override belongs.
           */}
 
+          {/*
+            Everything below the address is an *input* option, and it collapses
+            once there is a result.
+
+            It used to sit permanently above the results, which put the case-name
+            field's "e.g. Mixer follow — first hop" placeholder directly above a
+            finished investigation. A placeholder in an empty input is correct
+            and helpful; the same placeholder sitting next to real output reads
+            as though it leaked out of the result, and it did draw exactly that
+            conclusion here.
+
+            Collapsing rather than hiding keeps the capability -- someone
+            re-running the same address under a different case name can reopen
+            it -- and `defaultOpen` keys off whether a trace has completed, so
+            the first run shows the options and later ones do not.
+          */}
+          <Disclosure
+            /*
+             * `key` is load-bearing, not decoration.
+             *
+             * `Disclosure` seeds its open state from `defaultOpen` on mount and
+             * never looks at it again, so a disclosure rendered before the trace
+             * finished stayed open afterwards -- which is precisely the stray
+             * placeholder this is meant to remove. Keying on whether a result
+             * exists remounts it with the right default at the moment the trace
+             * completes. The alternative was making `Disclosure` controlled,
+             * which changes a shared component for one caller.
+             */
+            key={response ? "after-trace" : "before-trace"}
+            label="Options"
+            hint={
+              title.trim()
+                ? `case: ${title.trim()}`
+                : save
+                  ? "named investigations are saved to history"
+                  : null
+            }
+            defaultOpen={!response}
+            bodyClassName="space-y-4 pt-3"
+          >
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label htmlFor="title">Case name (optional)</Label>
@@ -858,7 +1125,7 @@ export default function TraceConsole() {
               </p>
             </div>
           ) : null}
-
+          </Disclosure>
         </SectionCard>
       </form>
 

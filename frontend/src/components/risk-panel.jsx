@@ -161,7 +161,7 @@ function Indicator({ indicator, origin }) {
   );
 }
 
-export function RiskPanel({ risk, className = "" }) {
+export function RiskPanel({ risk, className = "", compact = false }) {
   const assessment = risk || {};
   const indicators = useMemo(
     () => (Array.isArray(assessment.indicators) ? assessment.indicators : []),
@@ -191,10 +191,18 @@ export function RiskPanel({ risk, className = "" }) {
 
   return (
     <SectionCard
-      title="Risk assessment"
+      title={compact ? "Risk signals" : "Risk assessment"}
       className={className}
       bodyClassName="space-y-4"
     >
+      {/* compact: the caller owns the level and score, so the headline is dropped
+          here. This panel used to restate the same conclusion three more times
+          past the badge -- the score bar, the assessment sentence's opening
+          clause, and the "N indicators" header. A score a reader meets four
+          times before reaching the evidence is a score they stop reading.
+          Kept in compact mode: the signals, the honest note about an absence of
+          signals, the single attribution caveat, and the engine's arithmetic. */}
+      {compact ? null : (
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="flex items-start gap-3">
           <Icon
@@ -242,6 +250,7 @@ export function RiskPanel({ risk, className = "" }) {
           <ScoreBar score={score} max={100} tone={tone} />
         </div>
       </div>
+      )}
 
       {unassessable ? (
         <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs leading-5 text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
