@@ -130,6 +130,115 @@
     --blue-soft: #eaf1f8;
 }
 
+/*
+ * The landing hero's network motif.
+ *
+ * Three animations, all of them CSS, all of them on a five-second loop, and all
+ * of them keyed to `pathLength="100"` on the SVG paths in
+ * `components/network-motif.jsx` so the dash arithmetic is 0-100 rather than a
+ * measured pixel length that would need recomputing if the geometry moved.
+ *
+ * The pulse spends most of its cycle travelling and a short while resting. A
+ * signal that never stops reads as a screensaver and, on a page whose copy says
+ * everything shown is real, as something live. The rest is the point: this is
+ * a diagram of a movement, not a feed of one.
+ *
+ * Reduced motion stops all three rather than slowing them. A visitor who has
+ * asked their system to reduce motion gets a still diagram, which still reads
+ * correctly -- the destination node is distinguished by size and its ring, not
+ * by whether anything is moving.
+ */
+@keyframes bt-motif-travel {
+  0% {
+    stroke-dasharray: 10 90;
+    stroke-dashoffset: 100;
+    opacity: 0;
+  }
+  8% {
+    opacity: 1;
+  }
+  55% {
+    stroke-dasharray: 10 90;
+    stroke-dashoffset: 0;
+    opacity: 1;
+  }
+  70%,
+  100% {
+    stroke-dasharray: 10 90;
+    stroke-dashoffset: -10;
+    opacity: 0;
+  }
+}
+
+@keyframes bt-motif-travel-glow {
+  0% {
+    stroke-dasharray: 14 86;
+    stroke-dashoffset: 100;
+    opacity: 0;
+  }
+  8% {
+    opacity: 0.4;
+  }
+  55% {
+    stroke-dasharray: 14 86;
+    stroke-dashoffset: 0;
+    opacity: 0.4;
+  }
+  70%,
+  100% {
+    stroke-dasharray: 14 86;
+    stroke-dashoffset: -14;
+    opacity: 0;
+  }
+}
+
+@keyframes bt-motif-breathe {
+  0%,
+  100% {
+    r: 15;
+    opacity: 0.5;
+  }
+  50% {
+    r: 21;
+    opacity: 0.12;
+  }
+}
+
+.bt-motif-pulse {
+  animation: bt-motif-travel 5s linear infinite;
+}
+
+.bt-motif-pulse-glow {
+  animation: bt-motif-travel-glow 5s linear infinite;
+}
+
+.bt-motif-ring {
+  animation: bt-motif-breathe 5s ease-in-out infinite;
+  transform-origin: center;
+  transform-box: fill-box;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bt-motif-pulse,
+  .bt-motif-pulse-glow,
+  .bt-motif-ring {
+    animation: none;
+  }
+
+  /* Park the pulse at the destination rather than deleting it, so the traced
+     path still reads as traced when nothing is moving. */
+  .bt-motif-pulse,
+  .bt-motif-pulse-glow {
+    stroke-dasharray: none;
+    stroke-dashoffset: 0;
+    opacity: 0.28;
+  }
+
+  .bt-motif-ring {
+    opacity: 0.3;
+  }
+}
+
 .dark {
     --background: oklch(0.145 0 0);
     --foreground: oklch(0.985 0 0);

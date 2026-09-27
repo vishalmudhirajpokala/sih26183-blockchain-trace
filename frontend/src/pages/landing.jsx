@@ -23,6 +23,8 @@
 
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
+
+import { NetworkMotif } from "@/components/network-motif";
 import {
   ArrowRight,
   Boxes,
@@ -199,38 +201,51 @@ export default function Landing() {
           className="pointer-events-none absolute inset-0 bg-[radial-gradient(120%_80%_at_50%_-10%,var(--blue-soft),transparent_70%)]"
         />
         <div className="relative mx-auto max-w-6xl px-5 py-20 sm:py-28">
-          <div>
-            <Badge
-              variant="outline"
-              className="mb-6 border-border bg-card text-muted-foreground"
-            >
-              {health?.version ? `v${health.version}` : "Multi-chain investigation console"}
-              {health?.persistence ? ` · ${health.persistence} persistence` : ""}
-            </Badge>
+          {/* Two columns on large screens: the copy keeps the reading column and
+              the motif takes the space beside it. Below `lg` the second column
+              is removed rather than collapsed, so the hero stays a single
+              column of text on a phone. */}
+          <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(0,0.7fr)] lg:items-center lg:gap-12">
+            <div>
+              <Badge
+                variant="outline"
+                className="mb-6 border-border bg-card text-muted-foreground"
+              >
+                {health?.version ? `v${health.version}` : "Multi-chain investigation console"}
+                {health?.persistence ? ` · ${health.persistence} persistence` : ""}
+              </Badge>
 
-            <h1 className="max-w-3xl font-heading text-4xl leading-[1.08] font-semibold tracking-tight text-balance sm:text-5xl">
-              Trace funds across chains, and show your work.
-            </h1>
+              <h1 className="max-w-3xl font-heading text-4xl leading-[1.08] font-semibold tracking-tight text-balance sm:text-5xl">
+                Trace funds across chains, and show your work.
+              </h1>
 
-            <p className="mt-5 max-w-2xl text-base leading-7 text-muted-foreground sm:text-lg">
-              BlockTrace follows an address or a transaction across the chains it
-              can reach, normalizes every result into one shape, and separates what
-              a provider <em>said</em> from what a database <em>claims</em> from
-              what an engine <em>inferred</em>. Where it could not establish
-              something, it says so rather than filling the gap.
-            </p>
+              <p className="mt-5 max-w-2xl text-base leading-7 text-muted-foreground sm:text-lg">
+                BlockTrace follows an address or a transaction across the chains it
+                can reach, normalizes every result into one shape, and separates what
+                a provider <em>said</em> from what a database <em>claims</em> from
+                what an engine <em>inferred</em>. Where it could not establish
+                something, it says so rather than filling the gap.
+              </p>
 
-            <div className="mt-8 flex flex-wrap items-center gap-3">
-              <Button size="lg" render={<Link to={access.href} />}>
-                {access.cta}
-                <ArrowRight data-icon="inline-end" />
-              </Button>
-              <Button size="lg" variant="outline" render={<a href="#evidence" />}>
-                Read the evidence model
-              </Button>
+              <div className="mt-8 flex flex-wrap items-center gap-3">
+                <Button size="lg" render={<Link to={access.href} />}>
+                  {access.cta}
+                  <ArrowRight data-icon="inline-end" />
+                </Button>
+                <Button size="lg" variant="outline" render={<a href="#evidence" />}>
+                  Read the evidence model
+                </Button>
+              </div>
+
+              <p className="mt-4 text-xs text-muted-foreground">{access.detail}</p>
             </div>
 
-            <p className="mt-4 text-xs text-muted-foreground">{access.detail}</p>
+            {/* Decoration, and it says so. It carries no data -- no address, no
+                amount, no label -- so it cannot be read as a finding on a page
+                whose copy promises everything shown is real. */}
+            <div className="relative mx-auto hidden w-full max-w-sm lg:block">
+              <NetworkMotif className="aspect-[4/5] w-full" />
+            </div>
           </div>
         </div>
       </section>
