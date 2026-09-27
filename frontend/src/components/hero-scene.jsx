@@ -1,89 +1,112 @@
-import { useEffect, useState } from "react";
+import { Component, Suspense, lazy, useEffect, useState } from "react";
 
 import { HERO_SCENE_URL, heroSceneEnabled } from "@/lib/hero-scene";
 
 /**
- * Ambient 3D scene for the hero, as an isolated iframe.
+ * The Spline runtime is a WebGL runtime and it is not small -- 34 MB unpacked.
+ * Loading it eagerly would put it in the entry bundle and make it compete with
+ * the page for bandwidth on the one screen a judge sees first, for a decoration.
  *
- * Three decisions worth stating, because each of them is a way this could have
- * gone wrong.
+ * So it is code-split and requested only once the browser is idle, and only when
+ * a scene is actually configured. The build puts it in its own ~271 kB chunk
+ * rather than the entry bundle.
  *
- * IT IS LAZY, AND THE `src` IS THE THING THAT IS DEFERRED
+ * The default import is the plain runtime entry, not the `/next` one: that path
+ * exists for Next.js server components and this is a Vite app.
+ */
+const Spline = lazy(() => import("@splinetool/react-spline"));
+
+/**
+ * Contains a scene that throws while running.
  *
- * An iframe with a `src` in the first paint fetches and boots a WebGL viewer
- * while the headline is still trying to render. The element is rendered empty
- * and the `src` is attached only once the browser is idle, so the scene is in
- * the same code path as a below-the-fold image: present in the layout from the
- * start, loaded when it stops costing anything.
+ * This is not defensive padding; it is the thing that stops a decoration from
+ * taking down a page. Tested by pointing the config at a URL that 403s: the
+ * runtime throws "Data read, but end of buffer not reached" from inside the
+ * component rather than rejecting the lazy import, so `Suspense` does not catch
+ * it and the error propagates to the nearest boundary. There is no error
+ * boundary anywhere else in this app, so without this one component the whole
+ * landing page renders blank.
+ *
+ * Scene URLs also rot. Spline scenes are versioned, and an unpublished or
+ * deleted scene starts failing with no change on our side at all. That failure
+ * is expected rather than exceptional, and it has to be invisible.
+ */
+class SceneBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { failed: false };
+  }
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  componentDidCatch() {
+    // Intentionally silent. There is nothing useful to show a visitor about a
+    // background animation failing, and the only reader is whoever already
+    // knows: the URL in `lib/hero-scene.js` is wrong, or the scene is gone.
+  }
+
+  render() {
+    if (this.state.failed) return null;
+    return this.props.children;
+  }
+}
+
+/**
+ * Ambient 3D scene for the hero.
+ *
+ * Two decisions worth stating.
+ *
+ * IT IS LAZY, AND NOTHING IS REQUESTED UNTIL THE BROWSER IS IDLE
+ *
+ * The component is mounted immediately so the layout never shifts, but the
+ * runtime chunk is only fetched once the browser has nothing better to do, so
+ * the WebGL boot does not compete with the headline for the main thread.
  *
  * IT IS NOT INTERACTIVE
  *
- * The canvas is decoration sitting in its own column, and an iframe that
- * captures pointer events would swallow a scroll gesture on a touch device and
- * could sit over the hero's own call to action. Non-interactive also means
- * nobody can drag a "graph" out of it and read it as data, which matters on a
- * page whose copy promises that everything shown is real.
+ * The canvas is decoration in its own column. A canvas that captures pointer
+ * events would swallow a scroll gesture on a touch device and could sit over
+ * the hero's own call to action. Non-interactive also means nobody can drag a
+ * "graph" out of it and read it as data, which matters on a page whose copy
+ * promises that everything shown is real.
  *
- * IT IS EXCLUDED FROM THE TAB ORDER AND FROM SCREEN READERS
- *
- * An iframe is focusable by default, so without `tabIndex={-1}` keyboard users
- * tab into an animation that does nothing. It also carries a `title`, because
- * that is what a frame is announced as, and the one it should be: decoration.
+ * There is no background colour on the container and no border-radius, because
+ * the whole point of moving off the hosted viewer is that the scene no longer
+ * arrives inside someone else's painted box. If a visible rectangle still
+ * appears, it is the background colour set on the scene itself in Spline --
+ * something only the scene's author can change.
  */
 export function HeroScene({ className = "" }) {
   const enabled = heroSceneEnabled();
-  const [src, setSrc] = useState(null);
+  const [requested, setRequested] = useState(false);
 
   useEffect(() => {
-    if (!enabled || src) return undefined;
-    const attach = () => setSrc(HERO_SCENE_URL);
+    if (!enabled || requested) return undefined;
+    const attach = () => setRequested(true);
     if (typeof window.requestIdleCallback === "function") {
       const handle = window.requestIdleCallback(attach, { timeout: 2500 });
       return () => window.cancelIdleCallback?.(handle);
     }
-    const timer = window.setTimeout(attach, 500);
+    const timer = window.setTimeout(attach, 400);
     return () => window.clearTimeout(timer);
-  }, [enabled, src]);
+  }, [enabled, requested]);
 
   // Nothing configured: render nothing rather than an empty box, so the hero is
   // exactly the layout it would have been without this feature.
-  if (!enabled) return null;
+  if (!enabled || !requested) return null;
 
   return (
     <div
       aria-hidden="true"
       className={`pointer-events-none absolute inset-0 overflow-hidden ${className}`}
     >
-      {/*
-        The frame's own body is painted opaque -- `rgba(34.05, 36.47, 46.15, 1)`
-        -- and it is cross-origin, so it cannot be recoloured from here. What can
-        be changed is how its edges meet the page: without this the scene reads
-        as a hard grey rectangle dropped onto the page, which is worse than no
-        scene at all.
-
-        So the frame is clipped to a large radius and feathered at the border.
-        The feathering is deliberately shallow and the centre is left fully
-        opaque, which keeps the subject of the animation crisp.
-
-        It is also deliberately shallow at the bottom, where Spline's "Built
-        with" attribution sits. Fading that corner out would be a way of hiding
-        their attribution while claiming to be a visual effect, which is the one
-        thing this is not here to do.
-      */}
-      <div
-        className="h-full w-full overflow-hidden rounded-[2.5rem] [mask-image:linear-gradient(to_bottom,transparent_0,#000_9%,#000_86%,transparent_100%)]
-        [-webkit-mask-image:linear-gradient(to_bottom,transparent_0,#000_9%,#000_86%,transparent_100%)]"
-      >
-        <iframe
-          src={src || undefined}
-          title="Decorative BlockTrace brand animation"
-          tabIndex={-1}
-          loading="lazy"
-          referrerPolicy="no-referrer"
-          className="h-full w-full border-0"
-          allow="autoplay; fullscreen"
-        />
-      </div>
+      <SceneBoundary>
+        <Suspense fallback={null}>
+          <Spline scene={HERO_SCENE_URL} />
+        </Suspense>
+      </SceneBoundary>
     </div>
   );
 }

@@ -1,41 +1,29 @@
 /**
  * The landing page's ambient 3D scene.
  *
- * WHY AN IFRAME AND NOT THE SPLINE RUNTIME
+ * WHY THE RUNTIME AND NOT AN IFRAME
  *
- * `@splinetool/react-spline` wants a published `.splinecode` file, addressed
- * like `https://prod.spline.design/<hash>/scene.splinecode`. This scene is
- * published in Spline's viewer format instead, which is the one Spline serves
- * for embedding and the one its own documentation hands you as an iframe
- * snippet. The two are not interchangeable: the runtime is pointed at a viewer
- * HTML page and cannot read it, and no `.splinecode` address is discoverable
- * from the viewer response.
+ * The first attempt embedded Spline's hosted viewer, because that was the URL
+ * available at the time. It works, but it carries two costs that this URL does
+ * not: the viewer paints its own body at an opaque
+ * `rgba(34.05, 36.47, 46.15, 1)` and cannot be recoloured from a cross-origin
+ * page, and it stamps a "Built with Spline" attribution over the scene.
  *
- * The iframe is also the better architecture here, for three reasons that are
- * worth the trade:
+ * Given a published `.splinecode` file, the runtime renders the same scene with
+ * no viewer chrome at all. That is the difference between a scene that has to be
+ * disguised with a mask and one that simply sits on the page.
  *
- *   isolation        An error inside a nested browsing context cannot propagate
- *                    into this page. The runtime build needed an error boundary
- *                    precisely because it threw from inside React; an iframe
- *                    makes that class of failure structurally impossible.
- *   weight           The runtime is 34 MB unpacked and a 271 kB chunk, bundled
- *                    and versioned by us. Spline serves its own viewer from its
- *                    own CDN, so it is outside our dependency tree entirely.
- *   capability       The viewer deals with WebGL support, context loss and
- *                    resizing. We would be guessing at all three.
- *
- * To change the scene, paste a different viewer URL here. Nothing else to edit.
+ * To change the scene, export it from Spline (Export -> Spline file) and paste
+ * the `https://prod.spline.design/<hash>/scene.splinecode` URL here.
  */
 
 /**
- * The published Spline viewer URL for the scene shown in the hero.
- *
- * This is a public address, not an `app.spline.design/file/...` editor link.
- * An editor link identifies a file inside one person's account and has no
- * public counterpart, so it cannot be embedded.
+ * The published scene file. This is the address the runtime loads; it is not an
+ * `app.spline.design/file/...` editor link, which identifies a file inside one
+ * person's account and has no public counterpart.
  */
 export const HERO_SCENE_URL =
-  "https://my.spline.design/cryptocoins-doKAgFLxDFsY8uRPqtpM6Km5/";
+  "https://prod.spline.design/rHm9kW7Io6wrdQ5r/scene.splinecode";
 
 /**
  * Whether the scene should load at all.
@@ -52,7 +40,7 @@ export function heroSceneEnabled() {
   try {
     return !window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
   } catch {
-    // matchMedia unavailable or blocked; allow the scene and let the viewer
+    // matchMedia unavailable or blocked; allow the scene and let the runtime
     // decide what it can do.
     return true;
   }
