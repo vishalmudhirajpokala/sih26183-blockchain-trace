@@ -23,8 +23,6 @@
 
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-
-import { HeroScene } from "@/components/hero-scene";
 import {
   ArrowRight,
   Boxes,
@@ -201,66 +199,38 @@ export default function Landing() {
           className="pointer-events-none absolute inset-0 bg-[radial-gradient(120%_80%_at_50%_-10%,var(--blue-soft),transparent_70%)]"
         />
         <div className="relative mx-auto max-w-6xl px-5 py-20 sm:py-28">
-          {/* Two columns on large screens: the text keeps the reading column and
-              the scene takes the space that was empty beside it. Below `lg` the
-              second column is removed rather than collapsed, so a phone is never
-              asked to run a WebGL canvas it has no room for. */}
-          <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(0,0.8fr)] lg:items-center lg:gap-10">
-            <div>
-              <Badge
-                variant="outline"
-                className="mb-6 border-border bg-card text-muted-foreground"
-              >
-                {health?.version ? `v${health.version}` : "Multi-chain investigation console"}
-                {health?.persistence ? ` · ${health.persistence} persistence` : ""}
-              </Badge>
-
-              <h1 className="max-w-3xl font-heading text-4xl leading-[1.08] font-semibold tracking-tight text-balance sm:text-5xl">
-                Trace funds across chains, and show your work.
-              </h1>
-
-              <p className="mt-5 max-w-2xl text-base leading-7 text-muted-foreground sm:text-lg">
-                BlockTrace follows an address or a transaction across the chains it
-                can reach, normalizes every result into one shape, and separates what
-                a provider <em>said</em> from what a database <em>claims</em> from
-                what an engine <em>inferred</em>. Where it could not establish
-                something, it says so rather than filling the gap.
-              </p>
-
-              <div className="mt-8 flex flex-wrap items-center gap-3">
-                <Button size="lg" render={<Link to={access.href} />}>
-                  {access.cta}
-                  <ArrowRight data-icon="inline-end" />
-                </Button>
-                <Button size="lg" variant="outline" render={<a href="#evidence" />}>
-                  Read the evidence model
-                </Button>
-              </div>
-
-              <p className="mt-4 text-xs text-muted-foreground">{access.detail}</p>
-            </div>
-
-            {/* The scene's host.
-                Two things had to be right here, and both were measured rather
-                than eyeballed.
-
-                It needs a real box: the scene inside is absolutely positioned,
-                so it contributes nothing to layout, and an otherwise-empty box
-                in an items-center grid column collapses to 0x0 -- a working
-                scene rendered into a space that did not exist.
-
-                It needs the right *shape*. The Spline viewer sets its canvas to
-                `height: 100%` with no aspect preservation, so the scene simply
-                fills whatever box it is given: a wide, short box shows more
-                horizontally and less vertically, which crops tall content. At
-                945x340 the coins were cut off. 4:5 is portrait enough to hold
-                them and still fits beside the copy. */}
-            <div
-              className="relative hidden lg:block lg:aspect-[4/5]"
-              aria-hidden="true"
+          <div>
+            <Badge
+              variant="outline"
+              className="mb-6 border-border bg-card text-muted-foreground"
             >
-              <HeroScene />
+              {health?.version ? `v${health.version}` : "Multi-chain investigation console"}
+              {health?.persistence ? ` · ${health.persistence} persistence` : ""}
+            </Badge>
+
+            <h1 className="max-w-3xl font-heading text-4xl leading-[1.08] font-semibold tracking-tight text-balance sm:text-5xl">
+              Trace funds across chains, and show your work.
+            </h1>
+
+            <p className="mt-5 max-w-2xl text-base leading-7 text-muted-foreground sm:text-lg">
+              BlockTrace follows an address or a transaction across the chains it
+              can reach, normalizes every result into one shape, and separates what
+              a provider <em>said</em> from what a database <em>claims</em> from
+              what an engine <em>inferred</em>. Where it could not establish
+              something, it says so rather than filling the gap.
+            </p>
+
+            <div className="mt-8 flex flex-wrap items-center gap-3">
+              <Button size="lg" render={<Link to={access.href} />}>
+                {access.cta}
+                <ArrowRight data-icon="inline-end" />
+              </Button>
+              <Button size="lg" variant="outline" render={<a href="#evidence" />}>
+                Read the evidence model
+              </Button>
             </div>
+
+            <p className="mt-4 text-xs text-muted-foreground">{access.detail}</p>
           </div>
         </div>
       </section>
