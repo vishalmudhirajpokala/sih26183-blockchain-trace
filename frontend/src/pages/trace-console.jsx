@@ -58,7 +58,7 @@ import { TransactionTable } from "@/components/transaction-table";
 import { RiskPanel } from "@/components/risk-panel";
 import { api, reportHref } from "@/lib/api";
 import { EXAMPLE_TRACES, shortAddress } from "@/lib/example-traces";
-import { CHAIN_ORDER, chainLabel, statusInfo } from "@/lib/format";
+import { CHAIN_ORDER, chainLabel, isProviderFailure, statusInfo } from "@/lib/format";
 
 /** How long to wait after the last keystroke before asking the detector. */
 const DETECT_DEBOUNCE_MS = 320;
@@ -505,6 +505,112 @@ function VaspCandidates({ data }) {
   );
 }
 
+/**
+ * Entity types in words a reader with no crypto background can parse.
+ *
+ * `service` is the one that needed a second look: it is what a token contract
+ * resolves to, and "a service" on its own says very little. It is left honest
+ * rather than dressed up -- calling Tether "a stablecoin issuer" would be a
+ * claim the label does not make.
+ */
+const PLAIN_TYPE = {
+  exchange: "an exchange",
+  mixer: "a mixer or tumbler",
+  sanctioned: "a sanctioned entity",
+  high_risk: "a high-risk service",
+  service: "a service",
+};
+
+/**
+ * One plain sentence summarising the investigation, for someone who has never
+ * heard of a blockchain.
+ *
+ * Derived entirely from values the hero below already renders. It introduces no
+ * new source and no new inference, and that constraint is the point: a second
+ * summary that could disagree with the first would be worse than no summary, so
+ * this reads the same fields rather than recomputing them.
+ *
+ * Two things it deliberately does not do.
+ *
+ * It does not call the reported entity "the destination". `result.entity` is the
+ * best attribution found anywhere in the trace, which is usually a counterparty,
+ * and "the funds ended up here" is a claim about where the money came to rest.
+ * So the sentence says which direction the money actually moved, read off the
+ * transfers.
+ *
+ * It does not quote a confidence percentage. The number is real, but "70%
+ * confidence" reads as a measurement of something, and what sits behind it is a
+ * public provider's word that nobody has checked. The uncertainty is stated in
+ * words instead, without the vocabulary the detail sections use.
+ */
+function plainSummary({ result, meta, risk, entity, entityIsSubject, entityNode }) {
+  const providerFailed = isProviderFailure(result.status);
+
+  // Did the subject actually send to the attributed address, or receive from it?
+  // Read off the transfers rather than assumed: the two need different
+  // sentences, and guessing would invert the meaning.
+  const seed = (result.seed || "").toLowerCase();
+  const target = (entityNode?.address || "").toLowerCase();
+  let direction = null;
+  if (target) {
+    for (const tx of result.transactions || []) {
+      const from = (tx.from_address || "").toLowerCase();
+      const to = (tx.to_address || "").toLowerCase();
+      if (from === seed && to === target) {
+        direction = "out";
+        break;
+      }
+      if (to === seed && from === target) {
+        direction = "in";
+        break;
+      }
+    }
+  }
+
+  // A mixer is not treated as a dead end by assumption. The sentence only calls
+  // it an obstruction when a mixer was actually attributed AND the run was
+  // actually cut short. Claiming the trail was blocked by something we did not
+  // find is the worst possible failure for a sentence meant to be plain.
+  const mixerSignal = (risk?.indicators || []).some((i) =>
+    String(i.code || "").toLowerCase().includes("mixer"),
+  );
+
+  if (providerFailed) {
+    return "BlockTrace could not follow this wallet, because the public data sources it reads from did not answer.";
+  }
+
+  if (mixerSignal && meta.truncated) {
+    return "Tracing stopped early after reaching a mixer or similar service, which is built to make the next step hard to follow.";
+  }
+
+  if (entity) {
+    const name = entity.name;
+    const type =
+      PLAIN_TYPE[String(entity.type || "").toLowerCase()] || "of an unknown kind";
+    const tail = "a name from a public source, which BlockTrace has not confirmed";
+
+    if (entityIsSubject) {
+      return `Public sources describe this wallet as ${name}, ${type} — ${tail}.`;
+    }
+    if (direction === "in") {
+      return `This wallet received funds from ${name}, ${type} — ${tail}.`;
+    }
+    if (direction === "out") {
+      return `Funds from this wallet reached ${name}, ${type} — ${tail}.`;
+    }
+    // Attributed somewhere in the graph, but no direct transfer to or from the
+    // subject was found in this run. Said plainly rather than dressed up as a
+    // confirmed route.
+    const where = entityNode?.depth ? `${entityNode.depth} steps away` : "in this trace";
+    return `${name} appears ${where} as ${type} — ${tail}.`;
+  }
+
+  if (meta.truncated) {
+    return "No known destination could be identified for this wallet, and tracing stopped early before the trail ran out.";
+  }
+  return "No known destination could be identified for this wallet.";
+}
+
 function ResultPanel({ response, onReset }) {
   const navigate = useNavigate();
   const result = response.result || {};
@@ -569,6 +675,26 @@ function ResultPanel({ response, onReset }) {
 
   return (
     <div className="space-y-6">
+      {/*
+        The one-sentence answer, before anything else on the page.
+
+        Deliberately a sentence and not a card, and deliberately not a badge: a
+        reader who has never heard of a blockchain should be able to read this
+        line and stop, without interpreting a colour scale or a score to get
+        anything out of it. Everything under it is the detail behind this claim,
+        and none of it is needed to understand it.
+      */}
+      <p className="max-w-3xl text-balance text-lg leading-8 text-foreground sm:text-xl">
+        {plainSummary({
+          result,
+          meta,
+          risk,
+          entity,
+          entityIsSubject,
+          entityNode,
+        })}
+      </p>
+
       {/*
         The hero: the four things a reader came for, in the order they ask for
         them. What was traced, who it turned out to involve, how risky, and how
